@@ -171,6 +171,7 @@
 - 2026-10-29 22:30 用户要求修复重试：补 `static uint64_t g_game_frames` 并在 `g_stat_frames++` 处累加；`commit_renders_on()` 去掉缺失的 stream/unpaced 条件；`scene_waits_for_game(now_ns(), 0)` 补参数；重新合并 render_scene 统计与 tick held 逻辑；重新应用宿主改动。构建中
 - 2026-10-29 22:37 compositor 修复版构建成功（C 与 Kotlin 均通过），签名校验后已安装；待测试帧率、闪烁、流畅度，日志确认 screen tick 独立线程与 render on commit
 - 2026-10-30 00:06 用户点击"游玩 Steam"闪退；crash buffer 显示 `UnsatisfiedLinkError: nativeSetRenderOnCommit`。原因是回退重做时 `waylandcomp_jni.c` 只补了 extern、漏了 JNI 函数实现。已补函数并重新构建
+- 2026-10-30 00:15 JNI 修复版构建成功（APK 内 .so 含 `nativeSetRenderOnCommit` 符号），签名校验后已安装；待点击"游玩 Steam"验证不再闪退，并测试帧率/闪烁
 - C2 收尾结论：CPU 拓扑与 proot 性能均生效但无可感收益（按用户要求保留），compositor 性能组因基线版本差异放弃。剩余候选：FusionHUD（帧数显示改进）、休眠/暂停小修复
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
 
