@@ -185,6 +185,8 @@
 - 实验 D 结果：ForestTD 闪烁仍在且主观更严重，退出时有 `gameoverlayrenderer.so`（32 位组件缺失，无害）和一条 gamescope 窗口资源提示；已回退到 B 配置
 - 实验 E：`dxvk.maxFrameRate = 60`（限帧）→ 闪烁无变化；DXVK 1.10.3 无 tearFree 选项
 - 实验 F（构建中）：改 `droiddeck-session` 允许 `/root/.vkbridge-env` 传 `BL_GAMESCOPE_ARGS`，重编后试 `--immediate-flips`
+- 实验 F 结果：Big Picture 保持不闪烁（CEF 修复有效）；ForestTD 游戏内闪烁仍在 → `--immediate-flips` 无效，已回退，只保留 CEF 修复
+- 新现象：Prison Architect 的 Paradox 启动器初始界面，屏幕右侧/边缘有彩色雪花状噪点，HUD 仅 8 fps；今天测试中一直存在，疑似 gamescope 输出 1280×720 与面板 1334×750 缩放/边缘覆盖问题，待试缩放滤镜/原生分辨率
 - 调试入口：`files/linuxfs/root/.vkbridge-env`，`droiddeck-session` 启动时读取并导出，会话启动不会覆盖（已确认）
 - C2 收尾结论：CPU 拓扑与 proot 性能均生效但无可感收益（按用户要求保留），compositor 性能组因基线版本差异放弃。剩余候选：FusionHUD（帧数显示改进）、休眠/暂停小修复
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
