@@ -1,0 +1,15 @@
+# 本地调查材料、历史备份、凭据：不进仓库
+temp/
+gitacc.txt
+
+# 构建产物
+build/
+.gradle/
+*.apk
+*.aab
+*.apk.idsig
+local.properties
+
+# 自行生成的签名密钥，绝不提交
+*.jks
+*.keystore
