@@ -7,7 +7,7 @@
 
 ## 0. 一句话现状
 
-基线 APK 已完成并通过验证：包名 `com.rp4pro.droiddeck.lab`、自建签名 `CN=RP4Pro Lab`、可安装。下一步是装到 RP4 Pro 实机测试。
+基线 APK 已装到 RP4 Pro 并跑起来了：Steam Big Picture 正常显示且已登录。正在做游戏、手柄、音频和稳定性验证。
 
 ---
 
@@ -91,7 +91,7 @@
 
 ---
 
-## 5. 当前状态（基线 APK 已完成，待实机安装）
+## 5. 当前状态（基线 APK 已在实机运行）
 
 - 最终 APK：`src/app/build/outputs/apk/debug/app-debug.apk`
 - 大小：72,353,758 字节（约 69 MiB）
@@ -101,15 +101,27 @@
 - 构建结果：`BUILD SUCCESSFUL in 7m 54s`（增量重打包，2026-10-29 18:53）
 - 安装命令（待用户确认后执行）：`adb install -r <APK 路径>`
 
+### 实机记录（2026-10-29）
+
+- 19:03 安装成功：`/data/app/...`，dataDir `/data/user/0/com.rp4pro.droiddeck.lab`
+- 首次启动弹出权限审核（文件/通知/位置/麦克风/照片视频），用户已授权并继续
+- 19:08 Linux 运行时 r9 安装完成，应用数据约 3.1 GB
+- 配置页提示"GPU 不受支持"，用户打开"Mali 桥接"后该项消失，进度变为 3/4
+- 19:17 Steam Big Picture 启动成功，已登录，最近游戏列表正常显示
+- 截图：`temp/screen3.png`（配置页）、`temp/screen5.png`（Steam 界面）
+- 日志：vkbridge 正常分配/导出，无 FATAL、无 DEVICE_LOST
+- 用户为保持 Steam 地区一致，临时关闭了 RP4 的 VPN
+
 ---
 
 ## 6. 下一步
 
-1. 验证新 APK 的包名、签名、SHA256（用 `temp/verify-apk.sh`、`temp/check-signing.sh`）。
-2. 征得用户同意后，`adb install -r` 安装到这个独立包名（不会覆盖 Eden 或其他应用）。
-3. 启动应用，让用户自己登录 Steam，做基线测试（启动、游戏模式、手柄、音频、退出重进）。
-4. 记录构建/测试结果到文档，推送。
-5. 之后按 C1 → C2 → C3 → E 推进。
+1. 在 Steam 里跑一款轻量游戏，确认能进入实际玩法。
+2. 验证手柄、音频、Steam 菜单响应。
+3. 退出游戏、退出会话，再重新进入，确认可重复启动。
+4. 条件允许时测试休眠/恢复。
+5. 记录测试结果，推送文档。
+6. 之后按 C1 → C2 → C3 → E 推进。
 
 ---
 
@@ -157,7 +169,8 @@ MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu-24.04 -u rp4test -- bash /mnt/c/Users/28157
 ## 9. 未完成 / 未验证
 
 - ~~包名 + 签名同时正确的 APK~~（已完成，见第 5 节）
-- 实机安装、启动、Steam 登录与游戏测试
+- ~~实机安装、启动、Steam 登录~~（已完成，见第 5 节实机记录）
+- 游戏实际运行、手柄、音频、退出重进、休眠恢复
 - 版本号是否要跟 fix43 对齐
 - C1：MaliBridge v0.5.4.2 三方合并
 - C2：DroidDeck 官方补丁分批移植
