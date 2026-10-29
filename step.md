@@ -167,6 +167,8 @@
 - 2026-10-29 22:05 proot 性能测试：日志确认 `SessionService: proot: fast path on (64 binds)`，补丁生效；帧数与闪烁无明显区别。按"新版优先"保留
 - C2 已验证组：CPU 拓扑（生效、无收益、闪烁主观变差但按用户决定保留）、proot 性能（生效、无收益保留）。剩余候选：compositor 性能、FusionHUD、休眠/暂停
 - 2026-10-29 22:10 compositor 性能组：移植 067dabe8（screen tick 独立线程）与 8549ac9c（新帧到达即绘制）。compositor.c 手工合并 held 逻辑；补齐 JNI `nativeSetRenderOnCommit`、`SessionPrefs.vsyncThread/renderOnCommit`、`CompositorHost` 调用与 `android.os.Build` import。构建中
+- 2026-10-29 22:20 compositor 组构建失败：补丁依赖官方父版本的 `g_stream_on`、`g_release_unpaced`、`g_game_frames`，基线不存在；`scene_waits_for_game` 参数个数也不同。硬补等于把 stream 功能一起搬，成本高、预期收益低，已回退 5 个文件（compositor.c / jni / CompositorHost / WaylandCompositor.java / SessionPrefs.kt），设备保持 proot 版
+- C2 收尾结论：CPU 拓扑与 proot 性能均生效但无可感收益（按用户要求保留），compositor 性能组因基线版本差异放弃。剩余候选：FusionHUD（帧数显示改进）、休眠/暂停小修复
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
 
 ---
