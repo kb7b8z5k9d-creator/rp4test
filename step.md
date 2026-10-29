@@ -111,6 +111,11 @@
 - 截图：`temp/screen3.png`（配置页）、`temp/screen5.png`（Steam 界面）
 - 日志：vkbridge 正常分配/导出，无 FATAL、无 DEVICE_LOST
 - 用户为保持 Steam 地区一致，临时关闭了 RP4 的 VPN
+- 19:35 Prison Architect 进入实际画面（CEO 剧情），贴图有闪烁
+- 19:44 ForestTD：DroidDeck 内置 HUD 显示 54 fps；摇杆可控制移动；移动时画面闪烁
+- ForestTD 参照：Android 原生版 60 fps；DroidDeck 下不开帧生成约 50 fps；开 Win-FG 2x 显示 40→60 fps，但画面跳变
+- Steam 这个版本没有内置性能叠加；DroidDeck 自带 PerfHud（fps/电量/温度）需在会话抽屉里手动打开
+- 帧生成在 Mali 上不稳定，基线阶段保持关闭
 
 ---
 
