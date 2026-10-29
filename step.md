@@ -160,6 +160,7 @@
 - 2026-10-29 21:20 修正版构建并覆盖安装（签名已校验），待启动 ForestTD 验证游戏进程是否出现 `Windows sees ...`
 - 2026-10-29 21:25 游戏进程仍未应用（`compatdata/0` 的 `SteamGameId` 判断不满足）；改为只要 `STEAM_COMPAT_DATA_PATH` 非空就应用最快核心排序（所有 Proton 进程），正在重编
 - 2026-10-29 21:30 放宽版构建并安装（签名已校验，脚本哈希 19dba090…），待 ForestTD 验证游戏进程日志
+- 2026-10-29 21:40 CPU 拓扑确认生效：游戏进程也输出 `Windows sees 7 cores (7:7,4,5,0,1,2,3)`；HUD 51 fps，无收益，闪烁主观变明显。按"无严重负面影响才保留"原则回退：移除 `cpu_topology` 调用（函数保留供以后实验），重编中
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
 
 ---
