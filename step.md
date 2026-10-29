@@ -182,6 +182,9 @@
 - 实验 C（进行中）：保留 B 的配置，追加 `VKBRIDGE_AHB_RARELY=1`（AHB uncached），测游戏内闪烁
 - 实验 C 结果：ForestTD 闪烁无变化；同时观察到 Steam 启动验证进度条比之前快（可感知改善，可能来自 proot/compositor/CPU 拓扑，未单独归因）
 - 实验 D：保留 B，改 `VKBRIDGE_AHB_LINEAR=1`（AHB linear 布局），测游戏内闪烁
+- 实验 D 结果：ForestTD 闪烁仍在且主观更严重，退出时有 `gameoverlayrenderer.so`（32 位组件缺失，无害）和一条 gamescope 窗口资源提示；已回退到 B 配置
+- 实验 E：`dxvk.maxFrameRate = 60`（限帧）→ 闪烁无变化；DXVK 1.10.3 无 tearFree 选项
+- 实验 F（构建中）：改 `droiddeck-session` 允许 `/root/.vkbridge-env` 传 `BL_GAMESCOPE_ARGS`，重编后试 `--immediate-flips`
 - 调试入口：`files/linuxfs/root/.vkbridge-env`，`droiddeck-session` 启动时读取并导出，会话启动不会覆盖（已确认）
 - C2 收尾结论：CPU 拓扑与 proot 性能均生效但无可感收益（按用户要求保留），compositor 性能组因基线版本差异放弃。剩余候选：FusionHUD（帧数显示改进）、休眠/暂停小修复
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
