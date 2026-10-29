@@ -7,7 +7,7 @@
 
 ## 0. 一句话现状
 
-基线 APK 已装到 RP4 Pro 并跑起来了：Steam Big Picture 正常显示且已登录。正在做游戏、手柄、音频和稳定性验证。
+基线 B 已通过实机验收：Steam、Prison Architect、ForestTD 可运行，手柄与退出重进正常。当前进入 C1（MaliBridge v0.5.4.2 增量对比）。
 
 ---
 
@@ -116,17 +116,18 @@
 - ForestTD 参照：Android 原生版 60 fps；DroidDeck 下不开帧生成约 50 fps；开 Win-FG 2x 显示 40→60 fps，但画面跳变
 - Steam 这个版本没有内置性能叠加；DroidDeck 自带 PerfHud（fps/电量/温度）需在会话抽屉里手动打开
 - 帧生成在 Mali 上不稳定，基线阶段保持关闭
+- 19:50 基线验收：ForestTD 连续启动两次正常；Xbox 手柄布局，摇杆/按键可用；RP4 没有 Xbox Guide 键，Steam 键以后用组合键映射；音频待确认
+- 包名策略调整：主线 B/C1/C2/C3 统一用 `com.rp4pro.droiddeck.lab` 覆盖升级，保留数据与 Steam 登录；只有 PanVK 用独立包名
 
 ---
 
 ## 6. 下一步
 
-1. 在 Steam 里跑一款轻量游戏，确认能进入实际玩法。
-2. 验证手柄、音频、Steam 菜单响应。
-3. 退出游戏、退出会话，再重新进入，确认可重复启动。
-4. 条件允许时测试休眠/恢复。
-5. 记录测试结果，推送文档。
-6. 之后按 C1 → C2 → C3 → E 推进。
+1. C1：对比官方 v0.5.4.2 与基线内嵌 v0.5.4.1 + rp4pro-fixes 的差异，决定合并范围。
+2. 合并 C1 改动、构建、覆盖安装、回归测试。
+3. C2：DroidDeck 官方补丁分批移植。
+4. C3：Gamescope 组件 A/B。
+5. E：PanVK 隔离实验。
 
 ---
 
@@ -175,7 +176,9 @@ MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu-24.04 -u rp4test -- bash /mnt/c/Users/28157
 
 - ~~包名 + 签名同时正确的 APK~~（已完成，见第 5 节）
 - ~~实机安装、启动、Steam 登录~~（已完成，见第 5 节实机记录）
-- 游戏实际运行、手柄、音频、退出重进、休眠恢复
+- ~~游戏实际运行、手柄、退出重进~~（已完成：Prison Architect、ForestTD）
+- 音频是否正常（待确认）
+- 休眠/恢复（可选）
 - 版本号是否要跟 fix43 对齐
 - C1：MaliBridge v0.5.4.2 三方合并
 - C2：DroidDeck 官方补丁分批移植
