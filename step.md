@@ -139,6 +139,13 @@
 - 2026-10-29 20:36 用户先重装过游戏仍失败（重装不重建 Proton 前缀）；已停止应用并删除 `compatdata/233450`，待重启 Steam 后验证前缀重建与启动器自动安装
 - 2026-10-29 20:41 前缀重建后 Prison Architect 恢复正常，进入游戏画面（Day 17 / Sunset 更新），帧数 50–60 fps，闪烁仍在。C1 验收通过：无代码回归，ForestTD 闪烁/跳动有改善，帧率无明显提升（官方版本无性能优化）
 
+### C3 Gamescope 组件（2026-10-29）
+
+- 已把设备 `files/linuxfs` 内的 `gamescope`（usr/local/bin）和 `libVkLayer_FROG_gamescope_wsi_aarch64.so`（usr/lib）替换为 The412Banner 的 `gamescope-3.16.29-p23-nonadreno`
+- 替换前备份：`temp/backup-gamescope/`，原哈希 `6e1eb258…` / `47f52dab…`
+- 新哈希：`e7524621…` / `bc29c8ca…`，与组件包一致，权限 755
+- 待测试：重启 Steam 会话后看闪烁/帧率；回退时用备份文件覆盖回去
+
 ---
 
 ## 6. 下一步
