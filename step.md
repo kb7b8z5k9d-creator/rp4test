@@ -145,6 +145,9 @@
 - 替换前备份：`temp/backup-gamescope/`，原哈希 `6e1eb258…` / `47f52dab…`
 - 新哈希：`e7524621…` / `bc29c8ca…`，与组件包一致，权限 755
 - 待测试：重启 Steam 会话后看闪烁/帧率；回退时用备份文件覆盖回去
+- 2026-10-29 20:50 测试结果：Big Picture 与 Prison Architect 闪烁均无改善，性能无提升；Prison Architect 首次启动失败、第二次成功（更像 Proton 前缀首次初始化）
+- p23 改动说明：0120–0135 兼容性补丁（驱动拒绝 modifier 时回退 linear、SHM 上传、explicit sync 等），不修闪烁
+- 判定无收益，已回退原版 gamescope 与 WSI layer（哈希已校验回 6e1eb258 / 47f52dab）
 
 ---
 
