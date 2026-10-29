@@ -1,13 +1,13 @@
 # RP4 Pro DroidDeck — 项目进度（step.md）
 
-最后更新：2026-10-29 18:50（东八区）
+最后更新：2026-10-29 18:56（东八区）
 用途：额度耗尽、上下文压缩或换模型接手时，先读这份文件恢复现场。
 
 ---
 
 ## 0. 一句话现状
 
-基线源码已能完整编译出 APK；当前正在确认"包名 `com.rp4pro.droiddeck.lab` + 自建签名"同时正确的最终产物。下一步是装到 RP4 Pro 实机测试。
+基线 APK 已完成并通过验证：包名 `com.rp4pro.droiddeck.lab`、自建签名 `CN=RP4Pro Lab`、可安装。下一步是装到 RP4 Pro 实机测试。
 
 ---
 
@@ -91,11 +91,15 @@
 
 ---
 
-## 5. 当前进行中
+## 5. 当前状态（基线 APK 已完成，待实机安装）
 
-- 用 `temp/rebuild-debug.sh` 重新打包（同时带 `DROIDDECK_APPLICATION_ID=com.rp4pro.droiddeck.lab`、`DROIDDECK_APP_LABEL=RP4Pro Lab` 和 `LAB_*` 签名环境）
-- 目标：一个"包名 + 签名"都正确的 APK
-- 后台任务 ID（本会话）：`bbsge0hrs`
+- 最终 APK：`src/app/build/outputs/apk/debug/app-debug.apk`
+- 大小：72,353,758 字节（约 69 MiB）
+- SHA256：`2f7c66f2febc8af0d4735eb908809660164d7f8630d7a66107d55be9b52be0df`
+- 包名：`com.rp4pro.droiddeck.lab`，versionCode 13，versionName 0.4.0
+- 签名：`CN=RP4Pro Lab`，SHA-256 `183ee0cef6d56e2cf9ccf2263b6a9841bf641abba4b72352875a00e5855d72dd`，RSA 4096，v2/v3 通过
+- 构建结果：`BUILD SUCCESSFUL in 7m 54s`（增量重打包，2026-10-29 18:53）
+- 安装命令（待用户确认后执行）：`adb install -r <APK 路径>`
 
 ---
 
@@ -152,7 +156,7 @@ MSYS_NO_PATHCONV=1 wsl.exe -d Ubuntu-24.04 -u rp4test -- bash /mnt/c/Users/28157
 
 ## 9. 未完成 / 未验证
 
-- 包名 + 签名同时正确的 APK（当前正在做）
+- ~~包名 + 签名同时正确的 APK~~（已完成，见第 5 节）
 - 实机安装、启动、Steam 登录与游戏测试
 - 版本号是否要跟 fix43 对齐
 - C1：MaliBridge v0.5.4.2 三方合并
