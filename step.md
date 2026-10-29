@@ -166,6 +166,7 @@
 - 2026-10-29 21:58 proot 性能版构建成功（75.4 MB，talloc 走 macports 备用源），签名已校验并安装；待测试游戏加载速度、帧率、闪烁
 - 2026-10-29 22:05 proot 性能测试：日志确认 `SessionService: proot: fast path on (64 binds)`，补丁生效；帧数与闪烁无明显区别。按"新版优先"保留
 - C2 已验证组：CPU 拓扑（生效、无收益、闪烁主观变差但按用户决定保留）、proot 性能（生效、无收益保留）。剩余候选：compositor 性能、FusionHUD、休眠/暂停
+- 2026-10-29 22:10 compositor 性能组：移植 067dabe8（screen tick 独立线程）与 8549ac9c（新帧到达即绘制）。compositor.c 手工合并 held 逻辑；补齐 JNI `nativeSetRenderOnCommit`、`SessionPrefs.vsyncThread/renderOnCommit`、`CompositorHost` 调用与 `android.os.Build` import。构建中
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
 
 ---
