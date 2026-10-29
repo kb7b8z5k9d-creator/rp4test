@@ -130,6 +130,8 @@
   - `server/vkb_server.h`：加入 `vkb_syncfd_device_init/destroy` 声明，保留 cached-upload 声明
 - 新增文件：`server/server_apicap.c`、`server/server_syncfd.c` 及对应测试
 - 待验证：重新完整构建 → 覆盖安装 → 回归 ForestTD / Prison Architect，确认无回退
+- 2026-10-29 20:07 C1 构建成功并覆盖安装（同包名 `com.rp4pro.droiddeck.lab`、lab 签名，数据保留）
+- 下一步验证：DroidDeck 设置里把"Steam 菜单"切成 GPU（Mali-G77 默认被判旧 GPU 走软件渲染，UI 仅约 10 fps），重启会话看帧率与是否黑屏；回归 Crimsonland / ForestTD，对比文字偏移与闪烁
 
 ---
 
