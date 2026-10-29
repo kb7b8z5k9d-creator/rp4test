@@ -154,6 +154,7 @@
 - 2026-10-29 20:52 已移植 CPU 拓扑（基于官方 4ef6b53e + 9d85af75，手工适配基线脚本）：Windows 看到最快核心优先，写入 WINE_CPU_TOPOLOGY / PROTON_CPU_TOPOLOGY；`DROIDDECK_FASTEST_CORES=0` 可关
 - 设备脚本 `files/linuxfs/usr/local/bin/droiddeck-game-env` 已替换，备份 `temp/backup-game-env.py`（原哈希 d93ae2…），新哈希 a4bdbe…；源码同步修改
 - 待测试：重启 Steam 会话，日志查 `Windows sees N cores (...)`，对比 CPU 密集型游戏帧率；失败则回退脚本
+- 2026-10-29 20:58 发现直接替换设备脚本无效：DroidDeck 每次启动会话会从 APK 重新解压 linuxfs，替换被覆盖（哈希回到 d93ae2…）。改为重新构建 APK 把补丁打进去（构建中）
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
 
 ---
