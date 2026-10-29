@@ -119,6 +119,16 @@
 - 19:50 基线验收：ForestTD 连续启动两次正常；Xbox 手柄布局，摇杆/按键可用；RP4 没有 Xbox Guide 键，Steam 键以后用组合键映射；音频待确认
 - 包名策略调整：主线 B/C1/C2/C3 统一用 `com.rp4pro.droiddeck.lab` 覆盖升级，保留数据与 Steam 登录；只有 PanVK 用独立包名
 
+### C1 合并记录（MaliBridge v0.5.4.2）
+
+- 已把官方 `v0.5.4.1 → v0.5.4.2` 补丁应用到 `src/external/MaliBridge`
+- 补丁共 3316 行，大部分干净应用；3 处冲突手工合并：
+  - `server/server_memory.c`：保留基线用 `vkb_srv_env()` 的实现（比官方的 `vkb_srv_env_global` 更完整），不采用该 hunk
+  - `server/server_instance.c`：加入 `vkb_syncfd_device_init()`，保留基线的 `vkb_cu_device_init()`
+  - `server/vkb_server.h`：加入 `vkb_syncfd_device_init/destroy` 声明，保留 cached-upload 声明
+- 新增文件：`server/server_apicap.c`、`server/server_syncfd.c` 及对应测试
+- 待验证：重新完整构建 → 覆盖安装 → 回归 ForestTD / Prison Architect，确认无回退
+
 ---
 
 ## 6. 下一步
