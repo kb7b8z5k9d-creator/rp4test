@@ -172,6 +172,8 @@
 - 2026-10-29 22:37 compositor 修复版构建成功（C 与 Kotlin 均通过），签名校验后已安装；待测试帧率、闪烁、流畅度，日志确认 screen tick 独立线程与 render on commit
 - 2026-10-30 00:06 用户点击"游玩 Steam"闪退；crash buffer 显示 `UnsatisfiedLinkError: nativeSetRenderOnCommit`。原因是回退重做时 `waylandcomp_jni.c` 只补了 extern、漏了 JNI 函数实现。已补函数并重新构建
 - 2026-10-30 00:15 JNI 修复版构建成功（APK 内 .so 含 `nativeSetRenderOnCommit` 符号），签名校验后已安装；待点击"游玩 Steam"验证不再闪退，并测试帧率/闪烁
+- 2026-10-30 00:22 compositor 组确认生效：`screen tick runs on its own display-priority thread`，pacing 显示 `572 scenes, 572 on arrival`（render on commit 生效）；Crimsonland / ForestTD / Prison Architect 闪烁与性能均无差异，按"无负面影响"保留
+- C2 性能组完成：CPU 拓扑、proot 性能、compositor 性能均生效但无可感收益（保留）；gamescope p23 无收益已回退。剩余候选：FusionHUD（帧数显示）、休眠/暂停小修复
 - C2 收尾结论：CPU 拓扑与 proot 性能均生效但无可感收益（按用户要求保留），compositor 性能组因基线版本差异放弃。剩余候选：FusionHUD（帧数显示改进）、休眠/暂停小修复
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
 
