@@ -155,6 +155,7 @@
 - 设备脚本 `files/linuxfs/usr/local/bin/droiddeck-game-env` 已替换，备份 `temp/backup-game-env.py`（原哈希 d93ae2…），新哈希 a4bdbe…；源码同步修改
 - 待测试：重启 Steam 会话，日志查 `Windows sees N cores (...)`，对比 CPU 密集型游戏帧率；失败则回退脚本
 - 2026-10-29 20:58 发现直接替换设备脚本无效：DroidDeck 每次启动会话会从 APK 重新解压 linuxfs，替换被覆盖（哈希回到 d93ae2…）。改为重新构建 APK 把补丁打进去（构建中）
+- 2026-10-29 21:09 重建完成并覆盖安装：包名/签名正确，APK 内 game-env 哈希 d55f1e10…（含 CPU 拓扑 + 调试输出）；待启动会话查 `cpu_topology:` 与 `Windows sees N cores` 日志
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
 
 ---
