@@ -187,6 +187,8 @@
 - 实验 F（构建中）：改 `droiddeck-session` 允许 `/root/.vkbridge-env` 传 `BL_GAMESCOPE_ARGS`，重编后试 `--immediate-flips`
 - 实验 F 结果：Big Picture 保持不闪烁（CEF 修复有效）；ForestTD 游戏内闪烁仍在 → `--immediate-flips` 无效，已回退，只保留 CEF 修复
 - 新现象：Prison Architect 的 Paradox 启动器初始界面，屏幕右侧/边缘有彩色雪花状噪点，HUD 仅 8 fps；今天测试中一直存在，疑似 gamescope 输出 1280×720 与面板 1334×750 缩放/边缘覆盖问题，待试缩放滤镜/原生分辨率
+- **关键发现**：ForestTD 日志确认 `app "ForestTD", engine "Godot Engine", Vulkan 1.2`（不是 DXVK）；游戏呈现走 client 的 copy_present 路径（"copied into the screen swapchain"）。查看源码发现 zero-copy 只在 HDR 开启时才调用 `nativeSetZeroCopy(true)`，默认关闭，所以一直在复制路径
+- 已修改 `SessionActivity.kt`：每个会话默认 `WaylandCompositor.nativeSetZeroCopy(true)`（独立于 HDR），重编中；目标：游戏帧直接以 gralloc 缓冲呈现，消除复制路径的闪烁/边缘雪花。若黑屏/崩溃则回退
 - 调试入口：`files/linuxfs/root/.vkbridge-env`，`droiddeck-session` 启动时读取并导出，会话启动不会覆盖（已确认）
 - C2 收尾结论：CPU 拓扑与 proot 性能均生效但无可感收益（按用户要求保留），compositor 性能组因基线版本差异放弃。剩余候选：FusionHUD（帧数显示改进）、休眠/暂停小修复
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
