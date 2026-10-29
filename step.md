@@ -149,6 +149,13 @@
 - p23 改动说明：0120–0135 兼容性补丁（驱动拒绝 modifier 时回退 linear、SHM 上传、explicit sync 等），不修闪烁
 - 判定无收益，已回退原版 gamescope 与 WSI layer（哈希已校验回 6e1eb258 / 47f52dab）
 
+### C2 官方补丁（进行中）
+
+- 2026-10-29 20:52 已移植 CPU 拓扑（基于官方 4ef6b53e + 9d85af75，手工适配基线脚本）：Windows 看到最快核心优先，写入 WINE_CPU_TOPOLOGY / PROTON_CPU_TOPOLOGY；`DROIDDECK_FASTEST_CORES=0` 可关
+- 设备脚本 `files/linuxfs/usr/local/bin/droiddeck-game-env` 已替换，备份 `temp/backup-game-env.py`（原哈希 d93ae2…），新哈希 a4bdbe…；源码同步修改
+- 待测试：重启 Steam 会话，日志查 `Windows sees N cores (...)`，对比 CPU 密集型游戏帧率；失败则回退脚本
+- 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
+
 ---
 
 ## 6. 下一步
