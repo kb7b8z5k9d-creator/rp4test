@@ -131,7 +131,9 @@
 - 新增文件：`server/server_apicap.c`、`server/server_syncfd.c` 及对应测试
 - 待验证：重新完整构建 → 覆盖安装 → 回归 ForestTD / Prison Architect，确认无回退
 - 2026-10-29 20:07 C1 构建成功并覆盖安装（同包名 `com.rp4pro.droiddeck.lab`、lab 签名，数据保留）
-- 下一步验证：DroidDeck 设置里把"Steam 菜单"切成 GPU（Mali-G77 默认被判旧 GPU 走软件渲染，UI 仅约 10 fps），重启会话看帧率与是否黑屏；回归 Crimsonland / ForestTD，对比文字偏移与闪烁
+- 2026-10-29 20:20 C1 验证：把"配置 → 概览 → 详情 → Steam 菜单"从自动（软件）切成 GPU，重启会话后 Steam 参数变为 `-cef-force-gpu -cef-use-gl=angle -cef-use-angle=vulkan`，库界面 HUD 显示 60 fps（软件模式约 10 fps）
+- 但 GPU 模式下 Steam 界面也出现和游戏内一样的画面闪烁；软件模式稳定但只有约 10 fps。闪烁是 Mali 渲染固有问题，C1 未解决，留给 C2/C3
+- 待办：C1 下回归 Crimsonland（帧率、文字偏移）与 ForestTD，确认无回退
 
 ---
 
