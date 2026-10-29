@@ -134,6 +134,7 @@
 - 2026-10-29 20:20 C1 验证：把"配置 → 概览 → 详情 → Steam 菜单"从自动（软件）切成 GPU，重启会话后 Steam 参数变为 `-cef-force-gpu -cef-use-gl=angle -cef-use-angle=vulkan`，库界面 HUD 显示 60 fps（软件模式约 10 fps）
 - 但 GPU 模式下 Steam 界面也出现和游戏内一样的画面闪烁；软件模式稳定但只有约 10 fps。闪烁是 Mali 渲染固有问题，C1 未解决，留给 C2/C3
 - 待办：C1 下回归 Crimsonland（帧率、文字偏移）与 ForestTD，确认无回退
+- 闪烁来源已确认：交接词第 175 行引用 MaliBridge v0.5.4.1 的 RP4 Pro 实测"仍有画面闪烁和伪影"；v0.5.4.2 未承诺修复。old/PanVK 报告中 Crimsonland 闪烁可在 Android 侧 PanVK v1.0.2 消除但降帧（非 DroidDeck 路线）。MaliBridge README 的 green-square artifacts 属 Dimensity 9500，不适用 RP4
 
 ---
 
