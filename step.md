@@ -163,6 +163,7 @@
 - 2026-10-29 21:40 CPU 拓扑确认生效：游戏进程也输出 `Windows sees 7 cores (7:7,4,5,0,1,2,3)`；HUD 51 fps，无收益，闪烁主观变明显。按"无严重负面影响才保留"原则回退：移除 `cpu_topology` 调用（函数保留供以后实验），重编中
 - 2026-10-29 21:42 用户决定保留 CPU 拓扑（闪烁无法量化，不折腾回退）；源码调用已恢复，设备保持启用版
 - 2026-10-29 21:45 开始 proot 性能（官方 9294a601）：`fastpath.c` 13/14 hunk 应用，缺失的 `statx` 系列（`statx_call`、`fill_statx`、`fp_statx`）手工补全；新增 `svc-cache.h`/`svc-dispatch.h`/`svc-patch.h`/`svc-publish.h`/`svc-stack.h`；`build.sh` 增加下载备用源；`ProotFastPath.kt` 补 `import android.os.Build`。构建中
+- 2026-10-29 21:58 proot 性能版构建成功（75.4 MB，talloc 走 macports 备用源），签名已校验并安装；待测试游戏加载速度、帧率、闪烁
 - 后续候选：proot 性能（9294a601 系列）、compositor 性能（8549ac9c/8c4f97a1/067dabe8/b5cc6dd1）、FusionHUD（110cfc28）
 
 ---
