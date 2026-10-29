@@ -137,6 +137,7 @@
 - 闪烁来源已确认：交接词第 175 行引用 MaliBridge v0.5.4.1 的 RP4 Pro 实测"仍有画面闪烁和伪影"；v0.5.4.2 未承诺修复。old/PanVK 报告中 Crimsonland 闪烁可在 Android 侧 PanVK v1.0.2 消除但降帧（非 DroidDeck 路线）。MaliBridge README 的 green-square artifacts 属 Dimensity 9500，不适用 RP4
 - 2026-10-29 20:33 C1 回归：ForestTD 闪烁/跳动明显减少（改善）；Prison Architect 启动失败，报错是 Paradox Launcher 缺失（`launcherpath: File not found`），不是 MaliBridge/C1 代码问题。游戏目录里已有 `Launcher/launcher-installer-windows.msi`，但未安装到 Proton 前缀。修复：桌面模式运行该 msi 安装启动器；或绕过启动器直接运行 `Prison Architect64.exe --launched-from-launcher`
 - 2026-10-29 20:36 用户先重装过游戏仍失败（重装不重建 Proton 前缀）；已停止应用并删除 `compatdata/233450`，待重启 Steam 后验证前缀重建与启动器自动安装
+- 2026-10-29 20:41 前缀重建后 Prison Architect 恢复正常，进入游戏画面（Day 17 / Sunset 更新），帧数 50–60 fps，闪烁仍在。C1 验收通过：无代码回归，ForestTD 闪烁/跳动有改善，帧率无明显提升（官方版本无性能优化）
 
 ---
 
