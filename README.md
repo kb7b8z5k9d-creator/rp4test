@@ -6,6 +6,7 @@
 - 设备：Retroid Pocket 4 Pro（Mali-G77 MC9，Android 13，1334×750）
 - 基线：[yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) `source` 分支，已合并上游 fix46–fix51
 - 图形桥：[ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge) v0.5.4.2（fix44 的 MSAA errata 手工并入）
+- 源码仓库：[kb7b8z5k9d-creator/rp4develop](https://github.com/kb7b8z5k9d-creator/rp4develop)
 - 包名：`com.rp4pro.droiddeck.lab`，签名 `CN=RP4Pro Lab`
 
 ## 这个版本做了什么
@@ -44,10 +45,11 @@ APK 校验（当前里程碑 v0.1.1-fix51）：`8c8c41079e6fcd4dd62b5fc9a5c67a00
 ## 构建
 
 Windows + WSL2 Ubuntu 24.04 + Docker（交叉编译镜像 `droiddeck-local-cross:24.04-v3`），
-NDK 27.3.13750724、JDK 17。构建脚本和步骤见 `docs/整合方案.md` 与项目内的 `tools/build_local.sh`。
+NDK 27.3.13750724、JDK 17。源码与构建说明在源码仓库
+[rp4develop](https://github.com/kb7b8z5k9d-creator/rp4develop)，构建入口是 `tools/build_local.sh`。
 
-本地改动以补丁形式附在本仓库：`patches/fix51-local-changes.patch`（相对 fix51 基线，24 个文件），
-可用 `git apply` 应用到 `yujikaido/droiddeck-rp4pro` 的 fix51 源码；签名密钥不在仓库里，需自行生成。
+如果只想在官方 fix51 源码上复现改动：`patches/fix51-local-changes.patch`（相对 fix51 基线，24 个文件），
+用 `git apply` 应用；签名密钥不在仓库里，需自行生成。
 
 ## 上游项目
 
@@ -60,4 +62,84 @@ NDK 27.3.13750724、JDK 17。构建脚本和步骤见 `docs/整合方案.md` 与
 ## 说明
 
 这是个人测试构建，不是 DroidDeck 或 MaliBridge 的官方发布。使用风险自负；
-不包含任何 Steam 凭据或设备标识。测试报告见 `docs/RP4Pro-test-report.md`。
+不包含任何 Steam 凭据或设备标识。
+
+---
+
+# RP4 Pro DroidDeck (self-built)
+
+A self-compiled DroidDeck build for the **Retroid Pocket 4 Pro** (the Android runtime that runs
+Steam and PC games). Unofficial, self-signed, with its own package name, so it can live beside the
+official app.
+
+- Device: Retroid Pocket 4 Pro (Mali-G77 MC9, Android 13, 1334×750)
+- Base: [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) `source`, with
+  upstream fix46–fix51 merged
+- Graphics bridge: [ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge) v0.5.4.2 (fix44's
+  MSAA erratum hand-merged)
+- Source repository: [kb7b8z5k9d-creator/rp4develop](https://github.com/kb7b8z5k9d-creator/rp4develop)
+- Package: `com.rp4pro.droiddeck.lab`, signature `CN=RP4Pro Lab`
+
+## What this build changes
+
+**Fixes**
+
+- **Steam Big Picture flicker**: it came from Chromium's own Vulkan compositing. Setting
+  `BL_VKBRIDGE_CEF_VULKAN=0` in the session environment (ANGLE stays on Vulkan) removes it for every
+  Steam screen and every game.
+- **Whole-picture flicker (ForestTD and similar)**: two thresholds were fixed. A game window can be
+  1280×722, or 1152×648 with a 1151×647 source rectangle; the compositor used to give a window its
+  own display layer only when the window matched the scene exactly and the source matched the whole
+  image, so a one-pixel difference dropped the whole scene to the copy path and flickered. It now
+  accepts windows within ±16 px and sources within ±2 px, maps the buffer onto the window's actual
+  rectangle, and no longer counts touch-cursor windows of 64×64 or less as "above the game".
+- **Upstream patches**: fix46–fix51 are merged, including MaliBridge v0.5.4.2, fix44's `msaa2_as_4`
+  (Mali-G77 multisamples at 1×/4× only; D3D9 games that ask for 2× used to quit, now the texture is
+  made with 4 samples), the anti-aliasing switch, fastest-core-first ordering, closing Retro
+  emulators on exit, and DroidDeck's post-0.6.7 fixes (GTK3, game-folder listing, Steam UI refresh
+  pacing).
+- **Performance patches**: DroidDeck's CPU topology, proot fast path and compositor
+  tick/render-on-commit are included. All are confirmed active on this device; no measurable frame
+  rate change, kept because they cause no regression.
+
+**Known issues**
+
+- Prison Architect's ground textures still flicker. They go through OpenGL → Mesa zink → Vulkan →
+  Mali, independent of the display layer; forced synchronisation, disabling GL threading and the
+  game's compatibility mode were all tried without effect. Suspected in zink's texture/mipmap path.
+- Crimsonland's Chinese text sits slightly off or ghosts. It is not scaling, not DXVK and not system
+  font substitution (the fonts are packed inside the game), and the cause is still unknown.
+
+## Install
+
+1. Download the APK from [Releases](../../releases).
+2. Allow installing apps from unknown sources and install it (the package is independent, the
+   official app is not replaced).
+3. On first start, download the Linux runtime as prompted, then sign in to Steam.
+4. Self-signed build: future updates must be installed over this one (same signature).
+
+APK checksum (current milestone v0.1.1-fix51): `8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`
+
+## Build
+
+Windows + WSL2 Ubuntu 24.04 + Docker (cross-compile image `droiddeck-local-cross:24.04-v3`),
+NDK 27.3.13750724, JDK 17. The source and build notes are in the source repository
+[rp4develop](https://github.com/kb7b8z5k9d-creator/rp4develop); the entry point is
+`tools/build_local.sh`.
+
+To reproduce the changes on the official fix51 tree instead:
+`patches/fix51-local-changes.patch` (24 files against fix51), apply with `git apply`. The signing
+key is not in the repository; generate your own.
+
+## Upstream projects
+
+- [Droid-Deck/DroidDeck](https://github.com/Droid-Deck/DroidDeck)
+- [ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge)
+- [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro)
+- [The412Banner/droiddeck-nonadreno-drivers](https://github.com/The412Banner/droiddeck-nonadreno-drivers)
+- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro) (PanVK, untested)
+
+## Notes
+
+This is a personal test build, not an official DroidDeck or MaliBridge release. Use at your own
+risk; it contains no Steam credentials or device identifiers.
