@@ -11,12 +11,12 @@
 
 ## 这个版本做了什么
 
-**PanVK 实验版**
+**PanVK 安装即用版（默认）**
 
-- 支持导入、切换和直接加载 PanVK，并自动检测 dma-buf 导出失败、使用兼容回退。已在 RP4 Pro 上验证能进入 Steam；ForestTD 使用 Vulkan / Forward Mobile 时可正常进入并游玩，截图中的测试场景约 50 FPS。该数据只代表当时场景。
+- 内置 faux123 PanVK v1.1.3，支持导入、切换和直接加载，并自动检测 dma-buf 导出失败、使用兼容回退。已在 RP4 Pro 上验证能进入 Steam；ForestTD 使用 Vulkan / Forward Mobile 时可正常进入并游玩，截图中的测试场景约 50 FPS。该数据只代表当时场景。
 - 小小梦魇增强版已在 RP4 Pro / PanVK / Proton Experimental (ARM64) 使用单独的通用 VKD3D 组件通过 D3D12 进入游戏，画面正常，但帧率很低，尚未优化。ForestTD 默认 D3D12 路径在此修复后尚未复测；此前 Vulkan 对照使用启动参数 `%command% --rendering-method mobile --rendering-driver vulkan`。
 - PanVK 驱动（faux123 v1.1.3）和 VKD3D 组件已经打进 APK：首次启动自动安装，RP4 Pro 默认使用 PanVK；其他设备保持系统 Mali。VKD3D 组件是通用内存回退修复，对当前 Proton 的 64 位游戏生效；其他 Proton 版本和 32 位路径尚未验证。
-- [DX12 里程碑预发布](../../releases/tag/v0.3.0-dx12-preview) 提供 APK 和 VKD3D 组件；此前 [PanVK 预发布](../../releases/tag/v0.2.0-panvk-preview) 与稳定版 v0.1.1-fix51 仍保留。
+- 当前版本 [v0.5.0](../../releases/tag/v0.5.0) 已内置 PanVK 和 VKD3D；此前的 [DX12 预览](../../releases/tag/v0.3.0-dx12-preview)、[PanVK 预览](../../releases/tag/v0.2.0-panvk-preview) 与稳定版 v0.1.1-fix51 仍保留。
 - 源码 `source` / `driver-import` 的本次版本：`df822f1f9a48f2dc54af3ddeb1afe86a626b45af`。
 
 **修复**
@@ -58,6 +58,8 @@
 3. **PanVK + VKD3D 回退组件**：在 PanVK 上跑 D3D12（VKD3D-Proton）时修复 READBACK 内存类型。只对当前 Proton Experimental (ARM64) 的 64 位路径验证过，其他 Proton 和 32 位未验证。
 
 CEF 设置不是独立模式，它只影响 Steam 界面，和游戏渲染无关。
+
+补充一点容易混淆的：**运行时驱动**是 Linux 侧的 Turnip，只在 Linux 自己加载 Vulkan 时用；**显示驱动**是 Android 侧的驱动，也是 Mali 桥接实际给游戏用的那个。RP4 上只需要切“图形模式”，不用动运行时驱动。
 
 ### 怎么切
 
@@ -132,12 +134,12 @@ official app.
 
 ## What this build changes
 
-**Experimental PanVK build**
+**Install-and-play PanVK build (default)**
 
-- Imports, switches to and directly loads PanVK, automatically probing for failed dma-buf export and enabling the existing fallback. On RP4 Pro, Steam started and ForestTD ran using Vulkan / Forward Mobile; the captured scene showed about 50 FPS, which is not a general benchmark.
+- Bundles faux123's PanVK v1.1.3, imports, switches to and directly loads it, automatically probing for failed dma-buf export and enabling the existing fallback. On RP4 Pro, Steam started and ForestTD ran using Vulkan / Forward Mobile; the captured scene showed about 50 FPS, which is not a general benchmark.
 - Little Nightmares Enhanced reached D3D12 gameplay with normal graphics on RP4 Pro / PanVK / Proton Experimental (ARM64), using the separately installed generic VKD3D component. Frame rate is very low and has not been optimized. ForestTD's default D3D12 path has not been retested with this fix; its earlier Vulkan control used `%command% --rendering-method mobile --rendering-driver vulkan`.
 - The PanVK driver (faux123 v1.1.3) and the VKD3D component are bundled in the APK: the first start installs them, and an RP4 Pro uses PanVK by default; other devices stay on the system Mali driver. The component provides a general memory fallback for 64-bit games using the selected Proton; other Proton versions and the 32-bit path remain unverified.
-- The [DX12 milestone prerelease](../../releases/tag/v0.3.0-dx12-preview) provides an APK and VKD3D component. The earlier [PanVK prerelease](../../releases/tag/v0.2.0-panvk-preview) and stable v0.1.1-fix51 remain available.
+- The current [v0.5.0](../../releases/tag/v0.5.0) bundles PanVK and VKD3D. The earlier [DX12 preview](../../releases/tag/v0.3.0-dx12-preview), [PanVK preview](../../releases/tag/v0.2.0-panvk-preview) and stable v0.1.1-fix51 remain available.
 - Source version on `source` / `driver-import`: `df822f1f9a48f2dc54af3ddeb1afe86a626b45af`.
 
 **Fixes**
@@ -185,6 +187,8 @@ Only an MT8797 / Retroid Pocket 4 gets this profile; other devices keep the syst
 3. **PanVK + VKD3D fallback**: fixes the READBACK memory type for D3D12 (VKD3D-Proton) on PanVK. Verified only for the 64-bit path of the current Proton Experimental (ARM64); other Protons and the 32-bit path are unverified.
 
 The CEF setting is not a mode: it changes only the Steam UI, not game rendering.
+
+One distinction that causes confusion: the **runtime driver** is the Linux-side Turnip, used only when Linux loads Vulkan itself; the **display driver** is the Android-side driver, and it is what the Mali bridge gives the games. On the RP4 only the "Graphics mode" switch matters; leave the runtime driver alone.
 
 ### Switching
 
