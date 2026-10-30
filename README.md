@@ -86,6 +86,10 @@ CEF 设置不是独立模式，它只影响 Steam 界面，和游戏渲染无关
 4. 自签名构建：以后更新要覆盖安装（保持同一签名）。
 5. 安装后默认就是 PanVK 配置：驱动和 VKD3D 组件已内置，首次启动自动安装（Proton Experimental 出现后自动启用）；想切回系统 Mali 或改回来见上面的“图形模式”。
 
+### v0.5.0 首次安装注意
+
+本版第一次进入 Steam 时，PanVK 已经就绪；Proton 会在启动 Steam 时自动下载，但 VKD3D 回退组件的检查只在 App 启动时做一次，所以这一次还不会装上。全新用户第一次直接启动依赖该回退的 D3D12 游戏（如小小梦魇增强版、ForestTD 默认 D3D12）可能初始化失败；**完全退出应用再进**（不是只退出 Steam 回桌面）后会装好，之后正常。下个版本会把组件安装接到 Proton 安装完成之后，不再需要这次重启。
+
 v0.5.0 安装即用版 APK SHA-256：`b92ac32bf469a59ba1b02709cfb0b815b74d515a71bb3c1f121487ae33b177f1`（内置 PanVK v1.1.3 和 VKD3D 组件）
 
 v0.3.0 DX12 预览版 APK SHA-256：`c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`；VKD3D 组件 SHA-256：`3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`。
@@ -215,6 +219,10 @@ The component manager can restore Proton's own VKD3D separately: Proton Experime
 3. On first start, download the Linux runtime as prompted, then sign in to Steam.
 4. Self-signed build: future updates must be installed over this one (same signature).
 5. The PanVK profile is the default after installing: the driver and the VKD3D component are built in, installed on the first start (the component is selected once Proton Experimental exists). To go back to system Mali, see "Graphics modes" above.
+
+### v0.5.0 first-install note
+
+On the first Steam start, PanVK is already ready; Proton downloads automatically, but the VKD3D fallback is only checked once at app start, so it is not installed yet. A new user who starts a D3D12 game that relies on the fallback (Little Nightmares Enhanced, ForestTD's default D3D12 path) may see initialisation fail; **fully quit the app and start it again** (not just leave Steam to the home screen) and it will be installed. The next version hooks the component install after Proton finishes, so this extra restart disappears.
 
 v0.5.0 install-and-play APK SHA-256: `b92ac32bf469a59ba1b02709cfb0b815b74d515a71bb3c1f121487ae33b177f1` (PanVK v1.1.3 and the VKD3D component are built in)
 
