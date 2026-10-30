@@ -14,9 +14,10 @@
 **PanVK 实验版**
 
 - 支持导入、切换和直接加载 PanVK，并自动检测 dma-buf 导出失败、使用兼容回退。已在 RP4 Pro 上验证能进入 Steam；ForestTD 使用 Vulkan / Forward Mobile 时可正常进入并游玩，截图中的测试场景约 50 FPS。该数据只代表当时场景。
-- PanVK 驱动不包含在 APK 中，需另行获取并导入。ForestTD 默认 D3D12 路径仍闪退；小小梦魇增强版仍提示显存不足，原因尚未确认。ForestTD 的 Vulkan 对照使用 Steam 启动参数 `%command% --rendering-method mobile --rendering-driver vulkan`。
-- 实验版见 [PanVK 预发布](../../releases/tag/v0.2.0-panvk-preview)，稳定版 v0.1.1-fix51 仍保留。
-- 源码 `source` / `driver-import` 的本次版本：`2536bd7799939d4a5a841e43e346d4504bc9fb04`。
+- 小小梦魇增强版已在 RP4 Pro / PanVK / Proton Experimental (ARM64) 使用单独的通用 VKD3D 组件通过 D3D12 进入游戏，画面正常，但帧率很低，尚未优化。ForestTD 默认 D3D12 路径在此修复后尚未复测；此前 Vulkan 对照使用启动参数 `%command% --rendering-method mobile --rendering-driver vulkan`。
+- PanVK 驱动和 VKD3D 组件均不包含在 APK 中，需要分别导入。VKD3D 组件是通用内存回退修复，对当前 Proton 的 64 位游戏生效；其他 Proton 版本和 32 位路径尚未验证。
+- [DX12 里程碑预发布](../../releases/tag/v0.3.0-dx12-preview) 提供 APK 和 VKD3D 组件；此前 [PanVK 预发布](../../releases/tag/v0.2.0-panvk-preview) 与稳定版 v0.1.1-fix51 仍保留。
+- 源码 `source` / `driver-import` 的本次版本：`df822f1f9a48f2dc54af3ddeb1afe86a626b45af`。
 
 **修复**
 
@@ -46,10 +47,13 @@
 2. 允许安装未知来源应用，安装即可（包名独立，不会覆盖官方版）。
 3. 首次启动按提示下载 Linux 运行时，然后登录 Steam。
 4. 自签名构建：以后更新要覆盖安装（保持同一签名）。
+5. 使用 DX12 里程碑时，另从 Release 下载 `vkd3d-3.1-readback-fallback.wcp`，在应用的组件管理器中导入并为 Proton Experimental (ARM64) 选择它；管理器会保存原组件用于回退。另行导入并启用 PanVK 驱动。
 
 APK 校验（当前里程碑 v0.1.1-fix51）：`8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`
 
 PanVK 实验 APK SHA-256：`2708b362dd27fd39e3d6a5d24a2eef6f5795e5efb32854923ac14ae660411160`
+
+DX12 里程碑 APK SHA-256：`c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`；VKD3D 组件 SHA-256：`3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`。
 
 ## 构建
 
@@ -60,7 +64,7 @@ NDK 27.3.13750724、JDK 17。源码与构建说明在源码仓库
 如果只想在官方 fix51 源码上复现改动：`patches/fix51-local-changes.patch`（相对 fix51 基线，24 个文件），
 用 `git apply` 应用；签名密钥不在仓库里，需自行生成。
 
-PanVK 接入补丁：`patches/driver-import.patch`，相对源码仓库 `af27c28c`；包含直接加载及自动导出回退检测。
+PanVK 接入补丁：`patches/driver-import.patch`，相对源码仓库 `af27c28c`；包含直接加载、自动导出回退、驱动能力识别和 VKD3D 源码补丁。VKD3D 组件的构建说明见源码仓库 `tools/vkd3d/`。
 
 ## 上游项目
 
@@ -96,9 +100,10 @@ official app.
 **Experimental PanVK build**
 
 - Imports, switches to and directly loads PanVK, automatically probing for failed dma-buf export and enabling the existing fallback. On RP4 Pro, Steam started and ForestTD ran using Vulkan / Forward Mobile; the captured scene showed about 50 FPS, which is not a general benchmark.
-- The PanVK driver is not bundled in the APK and must be obtained and imported separately. ForestTD's default D3D12 renderer still crashes; Little Nightmares Enhanced still reports insufficient graphics memory, with the cause unconfirmed. The ForestTD Vulkan control used `%command% --rendering-method mobile --rendering-driver vulkan` as its Steam launch option.
-- See the [PanVK prerelease](../../releases/tag/v0.2.0-panvk-preview); stable v0.1.1-fix51 remains available.
-- Source version on `source` / `driver-import`: `2536bd7799939d4a5a841e43e346d4504bc9fb04`.
+- Little Nightmares Enhanced reached D3D12 gameplay with normal graphics on RP4 Pro / PanVK / Proton Experimental (ARM64), using the separately installed generic VKD3D component. Frame rate is very low and has not been optimized. ForestTD's default D3D12 path has not been retested with this fix; its earlier Vulkan control used `%command% --rendering-method mobile --rendering-driver vulkan`.
+- Neither the PanVK driver nor the VKD3D component is bundled in the APK; import them separately. The component provides a general memory fallback for 64-bit games using the selected Proton; other Proton versions and the 32-bit path remain unverified.
+- The [DX12 milestone prerelease](../../releases/tag/v0.3.0-dx12-preview) provides an APK and VKD3D component. The earlier [PanVK prerelease](../../releases/tag/v0.2.0-panvk-preview) and stable v0.1.1-fix51 remain available.
+- Source version on `source` / `driver-import`: `df822f1f9a48f2dc54af3ddeb1afe86a626b45af`.
 
 **Fixes**
 
@@ -135,10 +140,13 @@ official app.
    official app is not replaced).
 3. On first start, download the Linux runtime as prompted, then sign in to Steam.
 4. Self-signed build: future updates must be installed over this one (same signature).
+5. For the DX12 milestone, also download `vkd3d-3.1-readback-fallback.wcp` from the Release, import it in the component manager and select it for Proton Experimental (ARM64). The manager saves the original component for rollback. Obtain and enable PanVK separately.
 
 APK checksum (current milestone v0.1.1-fix51): `8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`
 
 PanVK experimental APK SHA-256: `2708b362dd27fd39e3d6a5d24a2eef6f5795e5efb32854923ac14ae660411160`
+
+DX12 milestone APK SHA-256: `c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`; VKD3D component SHA-256: `3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`.
 
 ## Build
 
@@ -151,7 +159,7 @@ To reproduce the changes on the official fix51 tree instead:
 `patches/fix51-local-changes.patch` (24 files against fix51), apply with `git apply`. The signing
 key is not in the repository; generate your own.
 
-The PanVK integration patch `patches/driver-import.patch` is relative to source commit `af27c28c` and includes direct loading and automatic export-fallback detection.
+The PanVK integration patch `patches/driver-import.patch` is relative to source commit `af27c28c` and includes direct loading, automatic export fallback, driver capability detection and the VKD3D source patch. See `tools/vkd3d/` in the source repository for component build notes.
 
 ## Upstream projects
 
