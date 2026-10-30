@@ -39,7 +39,7 @@
 3. 首次启动按提示下载 Linux 运行时，然后登录 Steam。
 4. 自签名构建：以后更新要覆盖安装（保持同一签名）。
 
-APK 校验（当前里程碑 v0.1.1-fix51）：`67f25cef6cad02c4274ce73ab76595aff687d4858e7557688abdcf21c9ae9bce`
+APK 校验（当前里程碑 v0.1.1-fix51）：`8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`
 
 ## 构建
 
