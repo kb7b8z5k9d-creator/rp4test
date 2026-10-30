@@ -11,6 +11,13 @@
 
 ## 这个版本做了什么
 
+**PanVK 实验版**
+
+- 支持导入、切换和直接加载 PanVK，并自动检测 dma-buf 导出失败、使用兼容回退。已在 RP4 Pro 上验证能进入 Steam；ForestTD 使用 Vulkan / Forward Mobile 时可正常进入并游玩，截图中的测试场景约 50 FPS。该数据只代表当时场景。
+- PanVK 驱动不包含在 APK 中，需另行获取并导入。ForestTD 默认 D3D12 路径仍闪退；小小梦魇增强版仍提示显存不足，原因尚未确认。ForestTD 的 Vulkan 对照使用 Steam 启动参数 `%command% --rendering-method mobile --rendering-driver vulkan`。
+- 实验版见 [PanVK 预发布](../../releases/tag/v0.2.0-panvk-preview)，稳定版 v0.1.1-fix51 仍保留。
+- 源码 `source` / `driver-import` 的本次版本：`2536bd7799939d4a5a841e43e346d4504bc9fb04`。
+
 **修复**
 
 - **Steam Big Picture 闪烁**：来自 Chromium 自己的 Vulkan 合成。会话环境里设置
@@ -42,6 +49,8 @@
 
 APK 校验（当前里程碑 v0.1.1-fix51）：`8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`
 
+PanVK 实验 APK SHA-256：`2708b362dd27fd39e3d6a5d24a2eef6f5795e5efb32854923ac14ae660411160`
+
 ## 构建
 
 Windows + WSL2 Ubuntu 24.04 + Docker（交叉编译镜像 `droiddeck-local-cross:24.04-v3`），
@@ -51,13 +60,15 @@ NDK 27.3.13750724、JDK 17。源码与构建说明在源码仓库
 如果只想在官方 fix51 源码上复现改动：`patches/fix51-local-changes.patch`（相对 fix51 基线，24 个文件），
 用 `git apply` 应用；签名密钥不在仓库里，需自行生成。
 
+PanVK 接入补丁：`patches/driver-import.patch`，相对源码仓库 `af27c28c`；包含直接加载及自动导出回退检测。
+
 ## 上游项目
 
 - [Droid-Deck/DroidDeck](https://github.com/Droid-Deck/DroidDeck)
 - [ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge)
 - [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro)
 - [The412Banner/droiddeck-nonadreno-drivers](https://github.com/The412Banner/droiddeck-nonadreno-drivers)
-- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro)（PanVK，未实测）
+- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro)（另行导入的 PanVK 驱动）
 
 ## 说明
 
@@ -81,6 +92,13 @@ official app.
 - Package: `com.rp4pro.droiddeck.lab`, signature `CN=RP4Pro Lab`
 
 ## What this build changes
+
+**Experimental PanVK build**
+
+- Imports, switches to and directly loads PanVK, automatically probing for failed dma-buf export and enabling the existing fallback. On RP4 Pro, Steam started and ForestTD ran using Vulkan / Forward Mobile; the captured scene showed about 50 FPS, which is not a general benchmark.
+- The PanVK driver is not bundled in the APK and must be obtained and imported separately. ForestTD's default D3D12 renderer still crashes; Little Nightmares Enhanced still reports insufficient graphics memory, with the cause unconfirmed. The ForestTD Vulkan control used `%command% --rendering-method mobile --rendering-driver vulkan` as its Steam launch option.
+- See the [PanVK prerelease](../../releases/tag/v0.2.0-panvk-preview); stable v0.1.1-fix51 remains available.
+- Source version on `source` / `driver-import`: `2536bd7799939d4a5a841e43e346d4504bc9fb04`.
 
 **Fixes**
 
@@ -120,6 +138,8 @@ official app.
 
 APK checksum (current milestone v0.1.1-fix51): `8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`
 
+PanVK experimental APK SHA-256: `2708b362dd27fd39e3d6a5d24a2eef6f5795e5efb32854923ac14ae660411160`
+
 ## Build
 
 Windows + WSL2 Ubuntu 24.04 + Docker (cross-compile image `droiddeck-local-cross:24.04-v3`),
@@ -131,13 +151,15 @@ To reproduce the changes on the official fix51 tree instead:
 `patches/fix51-local-changes.patch` (24 files against fix51), apply with `git apply`. The signing
 key is not in the repository; generate your own.
 
+The PanVK integration patch `patches/driver-import.patch` is relative to source commit `af27c28c` and includes direct loading and automatic export-fallback detection.
+
 ## Upstream projects
 
 - [Droid-Deck/DroidDeck](https://github.com/Droid-Deck/DroidDeck)
 - [ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge)
 - [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro)
 - [The412Banner/droiddeck-nonadreno-drivers](https://github.com/The412Banner/droiddeck-nonadreno-drivers)
-- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro) (PanVK, untested)
+- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro) (PanVK driver, imported separately)
 
 ## Notes
 
