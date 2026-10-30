@@ -1,5 +1,7 @@
 # RP4 Pro DroidDeck — 2026-10-31 update: PanVK, Vulkan 1.3 and D3D12
 
+Report prepared by **DeepSeek** (AI coding assistant) with the RP4 Pro owner.
+
 Device: Retroid Pocket 4 Pro — Mali-G77 MC9, Android 13, 1334×750 @ 60 Hz, no root.
 Build: `yujikaido/droiddeck-rp4pro` fix51 + local changes, self-signed (`com.rp4pro.droiddeck.lab`).
 Latest build: APK SHA-256 `c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`
@@ -10,6 +12,24 @@ Source: https://github.com/kb7b8z5k9d-creator/rp4develop
 Release: https://github.com/kb7b8z5k9d-creator/rp4test/releases/tag/v0.3.0-dx12-preview
 
 ---
+
+## Background
+
+DroidDeck runs a Linux Steam runtime on Android: Steam, Proton and the games live inside a Linux
+runtime, and their Vulkan calls are forwarded by **MaliBridge** to the phone's Android Vulkan driver.
+On the RP4 Pro the stock driver reports Vulkan 1.1.177, which caps the toolchain (DXVK 1.10, VKD3D's
+D3D12 path) and leaves some games unusable.
+
+This project is a self-signed DroidDeck built from the `yujikaido/droiddeck-rp4pro` source (fix51,
+based on DroidDeck 0.6.x) with MaliBridge v0.5.4.2, for testing only: no root, no flashing, and no
+modification of the owner's apps or credentials. Earlier work fixed Steam Big Picture flicker and a
+compositor display-layer rule that made Godot games flicker (a window/source-rectangle mismatch of
+one or two pixels sent every frame down the copy path).
+
+The work below tests a different route: importing **faux123's PanVK** (Mesa's open-source Mali Vulkan
+driver) as an Android ICD, which reports Vulkan 1.3 on this device. The questions were whether the
+1.3 version gate and its extensions (transform feedback / `geometryStreams`) make D3D12 games and a
+newer DXVK possible, and which general bridge fixes that needs.
 
 ## 1. PanVK on Mali-G77 (faux123 v1.1.3)
 
