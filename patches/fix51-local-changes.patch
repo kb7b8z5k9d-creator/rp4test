@@ -35,7 +35,7 @@ index d4eeae02..7bcfe957 100644
              // logs and VkBridgeNative's development override (-Pdroiddeck.notDebuggable to drop).
              debuggable !project.hasProperty('droiddeck.notDebuggable')
 diff --git a/app/src/main/cpp/waylandcomp/src/compositor.c b/app/src/main/cpp/waylandcomp/src/compositor.c
-index 97822a0e..0bdc745f 100644
+index 97822a0e..5f32da3a 100644
 --- a/app/src/main/cpp/waylandcomp/src/compositor.c
 +++ b/app/src/main/cpp/waylandcomp/src/compositor.c
 @@ -202,6 +202,7 @@ struct surface {
@@ -135,7 +135,7 @@ index 97822a0e..0bdc745f 100644
  
          if (buffer) {
              wl_list_remove(&s->pending_buffer_destroy.link);
-@@ -1643,16 +1675,37 @@ static int on_frame_timer(void *data) {
+@@ -1643,16 +1675,39 @@ static int on_frame_timer(void *data) {
  }
  
  static int layer_candidate(const struct draw_list *dl, int scene_w, int scene_h) {
@@ -162,10 +162,12 @@ index 97822a0e..0bdc745f 100644
 +        if (area > best_area) { best = i; best_area = area; }
 +    }
 +    if (best < 0 || (long long)best_area * 2 < (long long)scene_w * scene_h) {
-+        if (dl->n > 0) {
++        static int told;
++        if (dl->n > 0 && told < 4) {
++            told++;
 +            droiddeck_log("layer", "no display layer candidate: scene %dx%d, %d draw(s)%s", scene_w, scene_h, dl->n,
 +                       best >= 0 ? " - the largest window covers less than half the scene" : "");
-+            for (int i = 0; i < dl->n; i++) {
++            for (int i = 0; i < dl->n && i < 6; i++) {
 +                const struct vkp_draw *d = &dl->d[i];
 +                droiddeck_log("layer", "  draw %d: image %dx%d, blend %d, dmabuf %d, src %.0f,%.0f %.0fx%.0f, dst %d,%d %dx%d",
 +                           i, vkp_image_width(d->img), vkp_image_height(d->img), d->blend,
@@ -179,7 +181,7 @@ index 97822a0e..0bdc745f 100644
  }
  
  static struct surface *surface_for_image(const struct vkp_image *img) {
-@@ -1817,7 +1870,16 @@ static void render_scene(void) {
+@@ -1817,7 +1872,16 @@ static void render_scene(void) {
      const int64_t t_scene = now_ns();
      int copy = 0;
  
@@ -196,7 +198,7 @@ index 97822a0e..0bdc745f 100644
      g_hud_fresh = 0;
      g_hdr_unimported = NULL;
      wl_list_for_each(s, &g_surfaces, link) s->drawn = 0;
-@@ -1875,7 +1937,17 @@ static void render_scene(void) {
+@@ -1875,7 +1939,17 @@ static void render_scene(void) {
      if (hdr_route == 0 || hdr_route == 3) {
      const int pass_on = fx_on || framegen;
      int li = (g_zero_copy && !framegen && !cardboard) ? layer_candidate(&dl, w, h) : -1;
@@ -215,7 +217,7 @@ index 97822a0e..0bdc745f 100644
      const int fx_blocks = (li >= 0 && fx_on && over > 0);
      if (fx_blocks) { li = -1; over = 0; }
      const int ov_blocks = (li >= 0 && over > 0 && !fx_blocks && !sc_layer_overlay_affordable());
-@@ -1910,12 +1982,13 @@ static void render_scene(void) {
+@@ -1910,12 +1984,13 @@ static void render_scene(void) {
              r = ahb_swapchain_present(ls->dmabuf_buf, ls, w, h);
          if (r != 0 && li >= 0)
              r = fx_on ? sc_layer_present_pass(&dl.d[li], 1, w, h)
@@ -232,7 +234,7 @@ index 97822a0e..0bdc745f 100644
              if (ov <= 0) sc_layer_hide_overlay();
              if (ov < 0) {
                  sc_layer_hide();
-@@ -1946,9 +2019,10 @@ static void render_scene(void) {
+@@ -1946,9 +2021,10 @@ static void render_scene(void) {
      if (rendered) {
          int64_t t = presented_ns(t_scene);
          g_stat_frames++;
@@ -244,7 +246,7 @@ index 97822a0e..0bdc745f 100644
          }
          fire_all_frames();
      } else {
-@@ -1973,10 +2047,25 @@ static int on_fallback_timer(void *data) {
+@@ -1973,10 +2049,25 @@ static int on_fallback_timer(void *data) {
      return 0;
  }
  
@@ -271,7 +273,7 @@ index 97822a0e..0bdc745f 100644
      if (g_fallback_armed) return;
      if (!g_fallback_timer)
          g_fallback_timer = wl_event_loop_add_timer(wl_display_get_event_loop(g_display),
-@@ -1999,10 +2088,24 @@ static int scene_waits_for_game(int64_t now, int forced) {
+@@ -1999,10 +2090,24 @@ static int scene_waits_for_game(int64_t now, int forced) {
      return vkp_framegen_active() || !forced;
  }
  
@@ -296,7 +298,7 @@ index 97822a0e..0bdc745f 100644
      if (g_last_vsync_ns) {
          int64_t d = now - g_last_vsync_ns;
          if (d > 3000000LL && d < 40000000LL) g_refresh_ns = (g_refresh_ns * 7 + d) / 8;
-@@ -2013,6 +2116,13 @@ static void on_vsync(int64_t frame_time_ns) {
+@@ -2013,6 +2118,13 @@ static void on_vsync(int64_t frame_time_ns) {
      if (vkp_effects_sync()) forced = 1;
      if (vkp_cardboard_pose_changed()) forced = 1;
      if (forced) g_dirty = 1;
@@ -310,7 +312,7 @@ index 97822a0e..0bdc745f 100644
      if (!g_dirty) return;
      if (!scene_waits_for_game(now, forced)) {
          render_scene();
-@@ -3036,6 +3146,24 @@ static int on_stats_timer(void *data) {
+@@ -3036,6 +3148,24 @@ static int on_stats_timer(void *data) {
  #undef PERF_MS
          memset(&g_perf, 0, sizeof(g_perf));
      }
