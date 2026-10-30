@@ -1,0 +1,230 @@
+diff --git a/app/src/main/java/com/droiddeck/launcher/DriverMenus.kt b/app/src/main/java/com/droiddeck/launcher/DriverMenus.kt
+index 98017c55..a3411993 100644
+--- a/app/src/main/java/com/droiddeck/launcher/DriverMenus.kt
++++ b/app/src/main/java/com/droiddeck/launcher/DriverMenus.kt
+@@ -50,10 +50,11 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
+         autoStatus = autoStatus, releaseStatus = releaseStatus.ifEmpty { activity.getString(R.string.drivers_not_checked) }, checking = releaseChecking,
+         linuxRows = linuxRows, linuxSelected = linuxSelected, androidRows = androidRows, androidSelected = androidSelected,
+         linuxDownloads = linuxDownloads, androidDownloads = androidDownloads, canRestoreBundled = canRestoreBundled,
+-        activeBundle = activeBundle,
++        activeBundle = activeBundle, panVk = panVk,
+     )
+     var androidRows by mutableStateOf<List<DriverRow>>(emptyList())
+     var androidSelected by mutableStateOf("")
++    var panVk by mutableStateOf(false)
+ 
+     fun refreshDrivers() {
+         val lm = LinuxVulkanDriverManager(activity)
+@@ -88,6 +89,10 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
+         }
+         canRestoreBundled = td.hiddenBundled().isNotEmpty()
+         androidSelected = SessionPrefs.androidDriver(activity)
++        val panVkId = td.enumerateImported().firstOrNull {
++            td.libraryName(it)?.startsWith("libvulkan_panfrost") == true
++        }
++        panVk = panVkId != null && androidSelected == panVkId
+         activeBundle = DriverBundle.active(activity)?.label
+         refreshReleaseRows()
+         refreshPairs()
+@@ -288,6 +293,25 @@ internal class DriverMenus(private val activity: Activity, private val ui: Handl
+         }, "import-driver").start()
+     }
+ 
++    fun applyPanVk(on: Boolean) {
++        val td = TurnipDriver(activity)
++        val id = td.enumerateImported().firstOrNull {
++            td.libraryName(it)?.startsWith("libvulkan_panfrost") == true
++        }
++        if (on && id == null) {
++            android.widget.Toast.makeText(activity, activity.getString(R.string.gpu_panvk_missing), android.widget.Toast.LENGTH_LONG).show()
++            return
++        }
++        SessionPrefs.setAndroidDriver(activity, if (on) id!! else TurnipDriver.AUTO)
++        setMode(false)
++        refreshDrivers()
++        android.widget.Toast.makeText(
++            activity,
++            activity.getString(if (on) R.string.gpu_panvk_on_toast else R.string.gpu_panvk_off_toast),
++            android.widget.Toast.LENGTH_LONG,
++        ).show()
++    }
++
+     fun selectDriver(id: String, linux: Boolean) {
+         val bundle = DriverBundle.containing(activity, id, linux)
+         when {
+diff --git a/app/src/main/java/com/droiddeck/launcher/MainActivity.kt b/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
+index 87495a3f..ddde1b79 100644
+--- a/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
++++ b/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
+@@ -1248,6 +1248,7 @@ class MainActivity : ComponentActivity() {
+                 onImportAndroid = { pickAndroidDriver.launch(InAppFilePicker.buildIntent(this, ZIP_EXT, getString(R.string.drivers_pick_android))) },
+                 onImportZip = { pickAnyDriver.launch(InAppFilePicker.buildIntent(this, ZIP_EXT, getString(R.string.drivers_pick_any))) },
+                 onRestoreBundled = { TurnipDriver(this).restoreBundled(); drivers.refreshDrivers() },
++                onTogglePanVk = { on -> drivers.applyPanVk(on) },
+             ),
+             protons = com.droiddeck.launcher.ui.ProtonsState(
+                 rows = protons.protonRows, busyId = protons.protonBusyId, stage = protons.protonStage, percent = protons.protonPercent,
+diff --git a/app/src/main/java/com/droiddeck/launcher/gpu/DriverBundle.kt b/app/src/main/java/com/droiddeck/launcher/gpu/DriverBundle.kt
+index db8dc86c..696cf491 100644
+--- a/app/src/main/java/com/droiddeck/launcher/gpu/DriverBundle.kt
++++ b/app/src/main/java/com/droiddeck/launcher/gpu/DriverBundle.kt
+@@ -75,8 +75,8 @@ object DriverBundle {
+ 
+             val linuxStage = lm.newStagingDir()
+             val linuxId = try {
+-                val library = linuxDir.listFiles()?.firstOrNull { it.isFile && it.name.startsWith("libvulkan_freedreno") && it.name.endsWith(".so") }
+-                library?.copyTo(File(linuxStage, LinuxVulkanDriverManager.LIB_NAME))
++                val library = linuxDir.listFiles()?.firstOrNull { it.isFile && LinuxVulkanDriverManager.isDriverLibrary(it.name) }
++                library?.copyTo(File(linuxStage, LinuxVulkanDriverManager.storedName(library.name)))
+                 val meta = File(linuxDir, LinuxVulkanDriverManager.META_NAME).takeIf { it.isFile }
+                     ?.let { runCatching { JSONObject(FileUtils.readString(it)) }.getOrNull() }
+                 lm.adopt(linuxStage, library?.name, meta, manifest.name)
+diff --git a/app/src/main/java/com/droiddeck/launcher/gpu/VkBridgeComponent.kt b/app/src/main/java/com/droiddeck/launcher/gpu/VkBridgeComponent.kt
+index 54ec5b6f..27107261 100644
+--- a/app/src/main/java/com/droiddeck/launcher/gpu/VkBridgeComponent.kt
++++ b/app/src/main/java/com/droiddeck/launcher/gpu/VkBridgeComponent.kt
+@@ -47,9 +47,23 @@ class VkBridgeComponent(private val socket: File, private val logFile: File) : S
+         }
+         socket.delete()
+         exited = false
+-        val cmd = listOf(binary.absolutePath, "--socket", socket.absolutePath, "--log", logFile.absolutePath,
++        // A driver imported in the driver manager (PanVK, Turnip, ...) is an Android Vulkan ICD.
++        // Android's loader ignores VK_ICD_FILENAMES, so the server opens the ICD itself (--vulkan)
++        // and falls back to vk_icdGetInstanceProcAddr when the library has no loader entry point.
++        var driverLibrary: String? = null
++        runCatching {
++            val id = com.droiddeck.launcher.session.SessionPrefs.androidDriver(app())
++            val turnip = TurnipDriver(app())
++            val library = if (!id.isNullOrEmpty() && turnip.isInstalled(id)) turnip.libraryName(id) else null
++            if (library != null) {
++                driverLibrary = File(turnip.driverPath(id), library).absolutePath
++                Log.i(TAG, "vulkan driver for the server: $id ($library)")
++            }
++        }.onFailure { Log.w(TAG, "android driver selection", it) }
++        val cmdList = mutableListOf(binary.absolutePath, "--socket", socket.absolutePath, "--log", logFile.absolutePath,
+             "--cache-dir", cacheDir.absolutePath)
+-            .joinToString(" ") { it.replace("\\", "\\\\").replace(" ", "\\ ") }
++        driverLibrary?.let { cmdList.add("--vulkan"); cmdList.add(it) }
++        val cmd = cmdList.joinToString(" ") { it.replace("\\", "\\\\").replace(" ", "\\ ") }
+         val env = arrayOf("HOME=" + app().filesDir)
+         pid = HostProcess.start(cmd, env, app().filesDir, { status ->
+             exited = true
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt b/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt
+index 32dcaa16..30b88a93 100644
+--- a/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt
++++ b/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt
+@@ -912,6 +912,7 @@ fun ComponentsPage(
+                         onSelect = gpuActions.onSelectAndroid, onDelete = gpuActions.onRemoveAndroid, onRefresh = gpuActions.onRefresh,
+                         onDownload = gpuActions.onDownloadDriver, onImport = gpuActions.onImportAndroid, onRestore = gpuActions.onRestoreBundled,
+                         onBack = { driverPage = null },
++                        panVk = gpu.panVk, onTogglePanVk = gpuActions.onTogglePanVk,
+                     )
+                 }
+             }
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/DriverPage.kt b/app/src/main/java/com/droiddeck/launcher/ui/DriverPage.kt
+index 3d399438..8ff4b9d3 100644
+--- a/app/src/main/java/com/droiddeck/launcher/ui/DriverPage.kt
++++ b/app/src/main/java/com/droiddeck/launcher/ui/DriverPage.kt
+@@ -73,6 +73,8 @@ fun DriverPage(
+     onImport: () -> Unit,
+     onRestore: () -> Unit,
+     onBack: () -> Unit,
++    panVk: Boolean = false,
++    onTogglePanVk: (Boolean) -> Unit = {},
+ ) {
+     val host = rememberMenuHost()
+     val colors = MaterialTheme.colorScheme
+@@ -108,6 +110,16 @@ fun DriverPage(
+             }
+         },
+     ) {
++        SettingsGroup(stringResource(R.string.gpu_panvk_title)) {
++            SettingsRow(
++                stringResource(R.string.gpu_panvk_label),
++                stringResource(if (panVk) R.string.gpu_panvk_desc_on else R.string.gpu_panvk_desc_off),
++            ) {
++                SecondaryButton(stringResource(if (panVk) R.string.gpu_panvk_disable else R.string.gpu_panvk_enable)) {
++                    onTogglePanVk(!panVk)
++                }
++            }
++        }
+         SettingsGroup(stringResource(R.string.driver_installed)) {
+             val focusRow = rows.firstOrNull { it.id == selected } ?: rows.firstOrNull()
+             rows.forEachIndexed { i, row ->
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/GpuDriversPanel.kt b/app/src/main/java/com/droiddeck/launcher/ui/GpuDriversPanel.kt
+index bd850bd6..aeed33df 100644
+--- a/app/src/main/java/com/droiddeck/launcher/ui/GpuDriversPanel.kt
++++ b/app/src/main/java/com/droiddeck/launcher/ui/GpuDriversPanel.kt
+@@ -96,6 +96,7 @@ class GpuDriversState(
+     val androidDownloads: List<DownloadRow> = emptyList(),
+     val canRestoreBundled: Boolean = false,
+     val activeBundle: String? = null,
++    val panVk: Boolean = false,
+ ) {
+     val activePair: PairRow? get() = pairs.firstOrNull { it.active }
+ }
+@@ -113,6 +114,7 @@ class GpuDriversActions(
+     val onImportAndroid: () -> Unit = {},
+     val onImportZip: () -> Unit = {},
+     val onRestoreBundled: () -> Unit = {},
++    val onTogglePanVk: (Boolean) -> Unit = {},
+ )
+ 
+ @Composable
+diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
+index 8f785f21..3e7950d1 100644
+--- a/app/src/main/res/values-zh-rCN/strings.xml
++++ b/app/src/main/res/values-zh-rCN/strings.xml
+@@ -416,6 +416,15 @@
+     <string name="comp_display_driver">显示驱动</string>
+     <string name="comp_display_driver_hint">在两种模式下都将帧绘制到屏幕。重启应用以生效。</string>
+     <string name="comp_import_adrenotools">导入 AdrenoTools zip 包…</string>
++    <string name="gpu_panvk_title">图形模式</string>
++    <string name="gpu_panvk_label">PanVK（Vulkan 1.3）</string>
++    <string name="gpu_panvk_desc_on">已启用：游戏走导入的 PanVK 驱动，重启会话后生效。</string>
++    <string name="gpu_panvk_desc_off">已关闭：游戏通过 MaliBridge 使用手机自带 Mali 驱动。</string>
++    <string name="gpu_panvk_enable">启用 PanVK</string>
++    <string name="gpu_panvk_disable">切回系统 Mali</string>
++    <string name="gpu_panvk_missing">请先导入 PanVK 驱动（adpkg）</string>
++    <string name="gpu_panvk_on_toast">已切换到 PanVK，重启会话后生效</string>
++    <string name="gpu_panvk_off_toast">已切回系统 Mali 驱动，重启会话后生效</string>
+     <string name="comp_never">从未</string>
+     <string name="comp_nightlies_checked">每夜构建检查时间：%1$s</string>
+     <string name="comp_title">组件</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index d2ac05df..5c5637c7 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -418,6 +418,15 @@
+     <string name="comp_display_driver">Display driver</string>
+     <string name="comp_display_driver_hint">Draws frames to the screen in both modes. Restart the app to apply.</string>
+     <string name="comp_import_adrenotools">Import an AdrenoTools zip…</string>
++    <string name="gpu_panvk_title">Graphics mode</string>
++    <string name="gpu_panvk_label">PanVK (Vulkan 1.3)</string>
++    <string name="gpu_panvk_desc_on">On: games use the imported PanVK driver. Restart the session to apply.</string>
++    <string name="gpu_panvk_desc_off">Off: games use the phone\'s Mali driver through MaliBridge.</string>
++    <string name="gpu_panvk_enable">Enable PanVK</string>
++    <string name="gpu_panvk_disable">Switch to Mali</string>
++    <string name="gpu_panvk_missing">Import a PanVK driver (adpkg) first</string>
++    <string name="gpu_panvk_on_toast">Switched to PanVK; restart the session to apply</string>
++    <string name="gpu_panvk_off_toast">Back on the system Mali driver; restart the session to apply</string>
+     <string name="comp_never">never</string>
+     <string name="comp_nightlies_checked">Nightlies checked %1$s</string>
+     <string name="comp_title">Components</string>
+diff --git a/external/MaliBridge/server/server_main.c b/external/MaliBridge/server/server_main.c
+index a9d2359a..6ffdf369 100644
+--- a/external/MaliBridge/server/server_main.c
++++ b/external/MaliBridge/server/server_main.c
+@@ -232,6 +232,12 @@ static int server_init(const char *vk_lib, const char *cache_dir)
+         return 0;
+     }
+     vkb_gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr");
++    if (!vkb_gipa) {
++        /* An ICD loaded directly (--vulkan: PanVK and other Android ICDs) exports the ICD entry
++         * point instead of the loader's; the signatures match. */
++        vkb_gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vk_icdGetInstanceProcAddr");
++        if (vkb_gipa) VKB_INFO("Vulkan ICD: vk_icdGetInstanceProcAddr (loaded directly)");
++    }
+     if (!vkb_gipa) {
+         VKB_ERR("the Vulkan loader exports no vkGetInstanceProcAddr");
+         return 0;
