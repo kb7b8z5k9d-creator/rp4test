@@ -4,8 +4,7 @@
 非官方构建，自签名，独立包名，可以和官方版并存。
 
 - 设备：Retroid Pocket 4 Pro（Mali-G77 MC9，Android 13，1334×750）
-- 基线：[yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) `source` 分支（fix43），
-  已合并上游 fix44 / fix45
+- 基线：[yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) `source` 分支，已合并上游 fix46–fix51
 - 图形桥：[ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge) v0.5.4.2（fix44 的 MSAA errata 手工并入）
 - 包名：`com.rp4pro.droiddeck.lab`，签名 `CN=RP4Pro Lab`
 
@@ -15,11 +14,14 @@
 
 - **Steam Big Picture 闪烁**：来自 Chromium 自己的 Vulkan 合成。会话环境里设置
   `BL_VKBRIDGE_CEF_VULKAN=0`（ANGLE 仍走 Vulkan）后消失，对所有 Steam 页面和游戏生效。
-- **整画面闪烁（ForestTD 等）**：游戏全屏窗口是 1280×722，场景是 1280×720，原来要求严格相等才给
-  独立显示层，差两像素就整场退回复制路径并闪烁。现在允许 ±16 像素，并忽略 64×64 以下的触摸光标窗口，
-  触摸不再把游戏层踢掉。
-- **上游补丁**：MaliBridge v0.5.4.2；fix44 `msaa2_as_4`（Mali-G77 只有 1×/4× 采样，
-  D3D9 游戏要 2× 会退出，改为按 4× 创建）；fix45 已知游戏表（Ys: The Oath in Felghana 用 Wine 内置 d3dx9）。
+- **整画面闪烁（ForestTD 等）**：两个门槛都修了。游戏窗口可能是 1280×722，也可能 1152×648（源矩形
+  1151×647），合成器原来要求“窗口严格等于场景、源矩形严格等于整图”才给独立显示层，差一两个像素就
+  整场退回复制路径并闪烁。现在允许窗口 ±16 像素、源矩形 ±2 像素，并按窗口的实际位置和大小映射到
+  显示层；64×64 以下的触摸光标窗口也不再算“压在游戏上面”。
+- **上游补丁**：已合并 fix46–fix51，包括 MaliBridge v0.5.4.2、fix44 `msaa2_as_4`
+  （Mali-G77 只有 1×/4× 采样，D3D9 游戏要 2× 会退出，改为按 4× 创建）、抗锯齿开关、最快核心优先、
+  退 Retro 游戏时关闭模拟器等；DroidDeck 官方 0.6.7 之后的修复（GTK3、游戏目录识别、Steam UI 刷新率）
+  也都在里面。
 - **性能补丁**：DroidDeck 官方的 CPU 拓扑、proot fast path、compositor tick/render-on-commit。
   在这台设备上均确认生效，帧率无明显变化，按“无负面影响”保留。
 
@@ -29,7 +31,6 @@
   与显示层无关；强制同步、关 GL 线程、游戏兼容模式都试过，无效，怀疑在 zink 的纹理/mipmap 路径。
 - Crimsonland 的中文文字有轻微偏移/重影。不是缩放采样、不是 DXVK、不是系统字体替换
   （字体打包在游戏资源里），原因仍未定位。
-- ForestTD 在默认 1152×648 窗口下仍可能闪；“按窗口实际矩形映射”的通用修复还在做。
 
 ## 安装
 
@@ -38,7 +39,7 @@
 3. 首次启动按提示下载 Linux 运行时，然后登录 Steam。
 4. 自签名构建：以后更新要覆盖安装（保持同一签名）。
 
-APK 校验（当前里程碑）：`59a43707985bbb0358845bfd71179fe2d306563e81be77519dfc5daa56af3beb`
+APK 校验（当前里程碑 v0.1.1-fix51）：`67f25cef6cad02c4274ce73ab76595aff687d4858e7557688abdcf21c9ae9bce`
 
 ## 构建
 
