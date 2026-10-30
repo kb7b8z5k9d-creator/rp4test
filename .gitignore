@@ -2,6 +2,12 @@
 temp/
 gitacc.txt
 
+# 本地资料（方案、交接词、测试报告、step）：不进仓库
+docs/
+
+# 源码是独立仓库，不并入文档仓库
+src/
+
 # 构建产物
 build/
 .gradle/
