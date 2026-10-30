@@ -1,0 +1,2663 @@
+diff --git a/app/build.gradle b/app/build.gradle
+index d4eeae02..7bcfe957 100644
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -217,6 +217,17 @@ android {
+     }
+ 
+     signingConfigs {
++        // Lab signing key: keystore/lab-release.jks is local-only; passwords come from environment variables.
++        lab {
++            storeFile rootProject.file('keystore/lab-release.jks')
++            storeType "PKCS12"
++            storePassword System.getenv('LAB_STORE_PASSWORD') ?: ''
++            keyAlias System.getenv('LAB_KEY_ALIAS') ?: 'lab'
++            keyPassword System.getenv('LAB_KEY_PASSWORD') ?: ''
++            enableV1Signing = true
++            enableV2Signing = true
++            enableV3Signing = true
++        }
+         testkey {
+             storeFile file("${rootDir}/keystore/testkey.p12")
+             storeType "PKCS12"
+@@ -232,11 +243,11 @@ android {
+     buildTypes {
+         debug {
+             minifyEnabled false
+-            signingConfig signingConfigs.testkey
++            signingConfig rootProject.file('keystore/lab-release.jks').exists() ? signingConfigs.lab : signingConfigs.testkey
+         }
+         release {
+             minifyEnabled false
+-            signingConfig signingConfigs.testkey
++            signingConfig rootProject.file('keystore/lab-release.jks').exists() ? signingConfigs.lab : signingConfigs.testkey
+             // Mali bridge development fork: debuggable so `adb shell run-as` reaches the session
+             // logs and VkBridgeNative's development override (-Pdroiddeck.notDebuggable to drop).
+             debuggable !project.hasProperty('droiddeck.notDebuggable')
+diff --git a/app/src/main/cpp/waylandcomp/src/compositor.c b/app/src/main/cpp/waylandcomp/src/compositor.c
+index 97822a0e..0bdc745f 100644
+--- a/app/src/main/cpp/waylandcomp/src/compositor.c
++++ b/app/src/main/cpp/waylandcomp/src/compositor.c
+@@ -202,6 +202,7 @@ struct surface {
+     struct wl_resource *dmabuf;
+     struct dmabuf_buffer *dmabuf_buf;
+     struct wl_listener dmabuf_destroy;
++    const void *last_dmabuf;
+     int buf_w, buf_h, has_content;
+     int buf_alpha;
+     int opaque[4], pending_opaque[4], pending_opaque_set;
+@@ -253,6 +254,26 @@ static struct wl_event_source *g_render_idle, *g_frame_timer;
+ 
+ 
+ static int g_dirty;
++static int64_t g_dirty_since_ns;
++volatile int g_render_on_commit = 1;
++static int64_t g_rendered_tick_ns;
++static int g_tick_held;
++static int64_t g_hold_missed_ns;
++#define HOLD_RETRY_NS 1000000000LL
++#define PACE_BUFFERS 32
++static struct {
++    unsigned ticks, ticks_late_2ms, renders, commit_renders, null_attaches, reattaches, presented, replaced, undrawn, distinct;
++    int64_t tick_late_ns, tick_late_max_ns, wait_ns, wait_max_ns;
++    const void *buffers[PACE_BUFFERS];
++    uint64_t game_frames_seen;
++} g_pace;
++
++static void pace_note_buffer(const void *buffer) {
++    for (unsigned i = 0; i < g_pace.distinct && i < PACE_BUFFERS; i++)
++        if (g_pace.buffers[i] == buffer) return;
++    if (g_pace.distinct < PACE_BUFFERS) g_pace.buffers[g_pace.distinct] = buffer;
++    g_pace.distinct++;
++}
+ static int64_t g_last_vsync_ns;
+ static int64_t g_tick_vsync_ns;
+ static int64_t g_refresh_ns = 16666667;
+@@ -288,6 +309,7 @@ static struct wl_event_source *g_release_source;
+ static int g_scene_w, g_scene_h;
+ static int g_desktop_w, g_desktop_h;
+ static unsigned g_stat_frames, g_stat_dmabuf, g_stat_shm;
++static uint64_t g_game_frames;
+ 
+ static struct {
+     unsigned ticks;
+@@ -300,6 +322,7 @@ static struct {
+ } g_perf;
+ 
+ static void schedule_render(void);
++static void on_commit_idle(void *data);
+ 
+ static int64_t now_ns(void) {
+     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+@@ -665,6 +688,9 @@ extern void droiddeck_on_game_program(int pid, const char *program);
+ static void take_dmabuf(struct surface *s, struct dmabuf_buffer *b, struct wl_resource *buffer) {
+     const int repeat = s->dmabuf == buffer && s->dmabuf_buf == b;
+     if (!repeat) {
++        if (!s->dmabuf && s->last_dmabuf == buffer) g_pace.reattaches++;
++        s->last_dmabuf = buffer;
++        pace_note_buffer(buffer);
+         drop_dmabuf(s, 1);
+         s->dmabuf = buffer;
+         s->dmabuf_buf = b;
+@@ -786,12 +812,15 @@ static void feedback_resource_destroy(struct wl_resource *r) {
+     wl_list_remove(wl_resource_get_link(r));
+ }
+ 
+-static void feedback_discard_all(struct wl_list *list) {
++static unsigned feedback_discard_all(struct wl_list *list) {
+     struct wl_resource *fb, *tmp;
++    unsigned n = 0;
+     wl_resource_for_each_safe(fb, tmp, list) {
+         wp_presentation_feedback_send_discarded(fb);
+         wl_resource_destroy(fb);
++        n++;
+     }
++    return n;
+ }
+ 
+ static uint32_t nominal_refresh_ns(void) {
+@@ -816,6 +845,7 @@ static void feedback_present_all(struct wl_list *list, int64_t t) {
+                                                 nominal_refresh_ns(), 0, 0,
+                                                 WP_PRESENTATION_FEEDBACK_KIND_VSYNC);
+         wl_resource_destroy(fb);
++        g_pace.presented++;
+     }
+ }
+ 
+@@ -956,7 +986,9 @@ static void surface_commit(struct wl_client *c, struct wl_resource *r) {
+         struct wl_shm_buffer *shm = buffer && !db ? wl_shm_buffer_get(buffer) : NULL;
+         uint8_t pixel[4];
+ 
+-        feedback_discard_all(&s->feedback);
++        g_pace.replaced += feedback_discard_all(&s->feedback);
++        if (!buffer) g_pace.null_attaches++;
++        else if (!db) s->last_dmabuf = NULL;
+ 
+         if (buffer) {
+             wl_list_remove(&s->pending_buffer_destroy.link);
+@@ -1643,16 +1675,37 @@ static int on_frame_timer(void *data) {
+ }
+ 
+ static int layer_candidate(const struct draw_list *dl, int scene_w, int scene_h) {
+-    for (int i = dl->n - 1; i >= 0 && i >= dl->n - 2; i--) {
++    /* The game's window does not have to fill the scene: a game in a smaller window still gets
++     * its own display layer, mapped to where the window actually is. Pick the largest window,
++     * as long as it covers a good part of the scene. */
++    int best = -1, best_area = 0;
++    for (int i = 0; i < dl->n; i++) {
+         const struct vkp_draw *d = &dl->d[i];
+         if (d->blend) continue;
+         if (!vkp_image_is_dmabuf(d->img)) continue;
+-        if (d->dx != 0 || d->dy != 0 || d->dw != scene_w || d->dh != scene_h) continue;
+-        if (d->sx != 0 || d->sy != 0 || (int)d->sw != vkp_image_width(d->img) ||
+-            (int)d->sh != vkp_image_height(d->img)) continue;
+-        return i;
++        if (d->sx < 0 || d->sy < 0) continue;
++        /* 1152x648 buffers reach the compositor with a 1151x647 source rectangle (one pixel
++         * trimmed); a source within two pixels of the whole image still counts as the window. */
++        if (abs((int)d->sw - vkp_image_width(d->img)) > 2 ||
++            abs((int)d->sh - vkp_image_height(d->img)) > 2) continue;
++        if (d->dw <= 0 || d->dh <= 0) continue;
++        int area = d->dw * d->dh;
++        if (area > best_area) { best = i; best_area = area; }
++    }
++    if (best < 0 || (long long)best_area * 2 < (long long)scene_w * scene_h) {
++        if (dl->n > 0) {
++            droiddeck_log("layer", "no display layer candidate: scene %dx%d, %d draw(s)%s", scene_w, scene_h, dl->n,
++                       best >= 0 ? " - the largest window covers less than half the scene" : "");
++            for (int i = 0; i < dl->n; i++) {
++                const struct vkp_draw *d = &dl->d[i];
++                droiddeck_log("layer", "  draw %d: image %dx%d, blend %d, dmabuf %d, src %.0f,%.0f %.0fx%.0f, dst %d,%d %dx%d",
++                           i, vkp_image_width(d->img), vkp_image_height(d->img), d->blend,
++                           vkp_image_is_dmabuf(d->img), d->sx, d->sy, d->sw, d->sh, d->dx, d->dy, d->dw, d->dh);
++            }
++        }
++        return -1;
+     }
+-    return -1;
++    return best;
+ }
+ 
+ static struct surface *surface_for_image(const struct vkp_image *img) {
+@@ -1817,7 +1870,16 @@ static void render_scene(void) {
+     const int64_t t_scene = now_ns();
+     int copy = 0;
+ 
++    if (g_dirty_since_ns) {
++        const int64_t wait = t_scene - g_dirty_since_ns;
++        g_pace.wait_ns += wait;
++        if (wait > g_pace.wait_max_ns) g_pace.wait_max_ns = wait;
++        g_pace.renders++;
++        g_dirty_since_ns = 0;
++    }
+     g_dirty = 0;
++    g_rendered_tick_ns = g_tick_vsync_ns;
++    g_tick_held = 0;
+     g_hud_fresh = 0;
+     g_hdr_unimported = NULL;
+     wl_list_for_each(s, &g_surfaces, link) s->drawn = 0;
+@@ -1875,7 +1937,17 @@ static void render_scene(void) {
+     if (hdr_route == 0 || hdr_route == 3) {
+     const int pass_on = fx_on || framegen;
+     int li = (g_zero_copy && !framegen && !cardboard) ? layer_candidate(&dl, w, h) : -1;
+-    int over = li >= 0 ? dl.n - 1 - li : 0;
++    /* Small windows above the game (the touch cursor, a 24x24 dot) must not cost the game its
++     * display layer: the pointer is an Android view, and pausing zero-copy on every touch made
++     * the scene flip between the layer and the copy path (visible as flicker). */
++    int over = 0, over_at = -1;
++    if (li >= 0) {
++        for (int j = li + 1; j < dl.n; j++) {
++            if (vkp_image_width(dl.d[j].img) <= 64 && vkp_image_height(dl.d[j].img) <= 64) continue;
++            over++;
++            over_at = j;
++        }
++    }
+     const int fx_blocks = (li >= 0 && fx_on && over > 0);
+     if (fx_blocks) { li = -1; over = 0; }
+     const int ov_blocks = (li >= 0 && over > 0 && !fx_blocks && !sc_layer_overlay_affordable());
+@@ -1910,12 +1982,13 @@ static void render_scene(void) {
+             r = ahb_swapchain_present(ls->dmabuf_buf, ls, w, h);
+         if (r != 0 && li >= 0)
+             r = fx_on ? sc_layer_present_pass(&dl.d[li], 1, w, h)
+-                      : sc_layer_present(dl.d[li].img, w, h, ls ? droiddeck_surface_color(ls) : NULL);
++                      : sc_layer_present(dl.d[li].img, dl.d[li].dx, dl.d[li].dy, dl.d[li].dw, dl.d[li].dh, w, h,
++                                         ls ? droiddeck_surface_color(ls) : NULL);
+         if (r == 0) {
+             if (ls) ls->drawn = 1;
+             int go[8], ov = 0;
+-            if (over == 1 && li >= 0 && vkp_map_draw(&dl.d[li + 1], go))
+-                ov = sc_layer_present_overlay(dl.d[li + 1].img, go, dl.d[li + 1].blend) == 0 ? 1 : -1;
++            if (over == 1 && li >= 0 && over_at > li && vkp_map_draw(&dl.d[over_at], go))
++                ov = sc_layer_present_overlay(dl.d[over_at].img, go, dl.d[over_at].blend) == 0 ? 1 : -1;
+             if (ov <= 0) sc_layer_hide_overlay();
+             if (ov < 0) {
+                 sc_layer_hide();
+@@ -1946,9 +2019,10 @@ static void render_scene(void) {
+     if (rendered) {
+         int64_t t = presented_ns(t_scene);
+         g_stat_frames++;
++        g_game_frames++;
+         wl_list_for_each(s, &g_surfaces, link) {
+             if (s->drawn) feedback_present_all(&s->feedback, t);
+-            else feedback_discard_all(&s->feedback);
++            else g_pace.undrawn += feedback_discard_all(&s->feedback);
+         }
+         fire_all_frames();
+     } else {
+@@ -1973,10 +2047,25 @@ static int on_fallback_timer(void *data) {
+     return 0;
+ }
+ 
++/* A new frame is drawn when it arrives instead of at the next screen tick, at most once per refresh,
++   while frames go straight back to the game (no compositor limit), without streaming or frame generation. */
++static int commit_renders_on(void) {
++    return g_render_on_commit && !vkp_framegen_active();
++}
++
++static int render_on_commit(void) {
++    return commit_renders_on() && !g_render_idle && g_rendered_tick_ns != g_tick_vsync_ns;
++}
++
+ static void schedule_render(void) {
++    if (!g_dirty && !g_dirty_since_ns) g_dirty_since_ns = now_ns();
+     g_dirty = 1;
+     if (!g_display) return;
+-    if (g_last_vsync_ns && now_ns() - g_last_vsync_ns < 100000000LL) return;
++    if (g_last_vsync_ns && now_ns() - g_last_vsync_ns < 100000000LL) {
++        if (render_on_commit())
++            g_render_idle = wl_event_loop_add_idle(wl_display_get_event_loop(g_display), on_commit_idle, NULL);
++        return;
++    }
+     if (g_fallback_armed) return;
+     if (!g_fallback_timer)
+         g_fallback_timer = wl_event_loop_add_timer(wl_display_get_event_loop(g_display),
+@@ -1999,10 +2088,24 @@ static int scene_waits_for_game(int64_t now, int forced) {
+     return vkp_framegen_active() || !forced;
+ }
+ 
++static void on_commit_idle(void *data) {
++    g_render_idle = NULL;
++    if (!g_dirty || !commit_renders_on() || g_rendered_tick_ns == g_tick_vsync_ns || scene_waits_for_game(now_ns(), 0)) return;
++    g_pace.commit_renders++;
++    render_scene();
++}
++
+ static void on_vsync(int64_t frame_time_ns) {
+     int64_t now = now_ns();
+     int forced = 0;
+     g_perf.ticks++;
++    if (frame_time_ns > 0 && now >= frame_time_ns) {
++        const int64_t late = now - frame_time_ns;
++        g_pace.ticks++;
++        g_pace.tick_late_ns += late;
++        if (late > g_pace.tick_late_max_ns) g_pace.tick_late_max_ns = late;
++        if (late > 2000000LL) g_pace.ticks_late_2ms++;
++    }
+     if (g_last_vsync_ns) {
+         int64_t d = now - g_last_vsync_ns;
+         if (d > 3000000LL && d < 40000000LL) g_refresh_ns = (g_refresh_ns * 7 + d) / 8;
+@@ -2013,6 +2116,13 @@ static void on_vsync(int64_t frame_time_ns) {
+     if (vkp_effects_sync()) forced = 1;
+     if (vkp_cardboard_pose_changed()) forced = 1;
+     if (forced) g_dirty = 1;
++    if (g_tick_held && g_dirty) g_hold_missed_ns = now;
++    g_tick_held = 0;
++    if (!forced && commit_renders_on() && g_dirty_since_ns && now - g_dirty_since_ns < g_refresh_ns &&
++        now - g_hold_missed_ns >= HOLD_RETRY_NS) {
++        g_tick_held = 1;
++        return;
++    }
+     if (!g_dirty) return;
+     if (!scene_waits_for_game(now, forced)) {
+         render_scene();
+@@ -3036,6 +3146,24 @@ static int on_stats_timer(void *data) {
+ #undef PERF_MS
+         memset(&g_perf, 0, sizeof(g_perf));
+     }
++    const uint64_t game = g_game_frames - g_pace.game_frames_seen;
++    if (g_pace.ticks || g_pace.renders || game || g_pace.reattaches || g_pace.null_attaches || g_pace.distinct ||
++        g_pace.presented || g_pace.replaced || g_pace.undrawn) {
++        droiddeck_log("pacing", "last 10 s: tick reaches compositor %.2f/%.2f ms late (%u ticks, %u over 2 ms) | "
++                   "new frame waits %.2f/%.2f ms to be drawn (%u scenes, %u on arrival) | %llu game frames, %u re-attached after an "
++                   "empty attach, %u empty attaches, %u distinct buffers | feedback %u shown, %u replaced before drawing, "
++                   "%u not drawn",
++                   g_pace.ticks ? (double)g_pace.tick_late_ns / 1e6 / g_pace.ticks : 0.0, (double)g_pace.tick_late_max_ns / 1e6,
++                   g_pace.ticks, g_pace.ticks_late_2ms,
++                   g_pace.renders ? (double)g_pace.wait_ns / 1e6 / g_pace.renders : 0.0, (double)g_pace.wait_max_ns / 1e6,
++                   g_pace.renders, g_pace.commit_renders, (unsigned long long)game, g_pace.reattaches, g_pace.null_attaches, g_pace.distinct,
++                   g_pace.presented, g_pace.replaced, g_pace.undrawn);
++    }
++    {
++        const uint64_t seen = g_game_frames;
++        memset(&g_pace, 0, sizeof(g_pace));
++        g_pace.game_frames_seen = seen;
++    }
+     g_stat_frames = g_stat_dmabuf = g_stat_shm = 0;
+     droiddeck_color_stats_tick();
+ 
+diff --git a/app/src/main/cpp/waylandcomp/src/sc_layer.c b/app/src/main/cpp/waylandcomp/src/sc_layer.c
+index ca80b181..8335a889 100644
+--- a/app/src/main/cpp/waylandcomp/src/sc_layer.c
++++ b/app/src/main/cpp/waylandcomp/src/sc_layer.c
+@@ -826,14 +826,18 @@ unavailable:
+     return -1;
+ }
+ 
+-int sc_layer_present(struct vkp_image *src, int scene_w, int scene_h, const struct droiddeck_color *color) {
++int sc_layer_present(struct vkp_image *src, int dx, int dy, int dw, int dh, int scene_w, int scene_h,
++                     const struct droiddeck_color *color) {
+     struct layer *l = layer_of(SC_LAYER_GAME);
+     if (!src || ensure_sc(l) != 0) return -1;
+     int sw = vkp_image_width(src), sh = vkp_image_height(src);
++    if (vkp_update_map(scene_w, scene_h) != 0) return -1;
++    struct vkp_draw d = {.img = src, .sx = 0, .sy = 0, .sw = (float)sw, .sh = (float)sh,
++                         .dx = dx, .dy = dy, .dw = dw, .dh = dh};
+     int r[8];
+-    int g = layer_geometry(sw, sh, scene_w, scene_h, r);
+-    if (g < 0) return -1;
+-    if (g == 0) { sc_layer_hide(); return 0; }
++    /* The window is where the game put it, not necessarily the whole scene: map its buffer onto
++     * that rectangle instead of stretching it over the scene. */
++    if (!vkp_map_draw(&d, r)) { sc_layer_hide(); return 0; }
+ 
+     int wait_fd;
+     int idx = take_free_slot(l, sw, sh, AHB_RGBA8, &wait_fd);
+@@ -843,8 +847,8 @@ int sc_layer_present(struct vkp_image *src, int scene_w, int scene_h, const stru
+     if (color && color->dataspace) droiddeck_color_frame_shown(color, DROIDDECK_HDR_LAYER_COPY, AHB_RGBA8);
+     if (!l->first_logged) {
+         l->first_logged = 1;
+-        droiddeck_log("layer", "presenting %dx%d game frames on their own SurfaceControl layer (%s pool, %d buffers); "
+-                   "HUD and pointer stay Android views above it", sw, sh,
++        droiddeck_log("layer", "presenting %dx%d game frames at %d,%d-%d,%d on their own SurfaceControl layer (%s pool, %d buffers); "
++                   "HUD and pointer stay Android views above it", sw, sh, dx, dy, dx + dw, dy + dh,
+                    pool_kind(l->pool_modifier), l->pool_n);
+     }
+     vkp_signal_first_frame();
+diff --git a/app/src/main/cpp/waylandcomp/src/sc_layer.h b/app/src/main/cpp/waylandcomp/src/sc_layer.h
+index 9df4cd80..016719ca 100644
+--- a/app/src/main/cpp/waylandcomp/src/sc_layer.h
++++ b/app/src/main/cpp/waylandcomp/src/sc_layer.h
+@@ -18,7 +18,7 @@ int sc_layer_can_tag_hdr(void);
+ void sc_layer_hdr_symbols(char *out, size_t size);
+ 
+ 
+-int sc_layer_present(struct vkp_image *src, int scene_w, int scene_h, const struct droiddeck_color *color);
++int sc_layer_present(struct vkp_image *src, int dx, int dy, int dw, int dh, int scene_w, int scene_h, const struct droiddeck_color *color);
+ 
+ int sc_layer_present_pass(const struct vkp_draw *draws, int n, int scene_w, int scene_h);
+ 
+diff --git a/app/src/main/cpp/waylandcomp/src/waylandcomp_jni.c b/app/src/main/cpp/waylandcomp/src/waylandcomp_jni.c
+index b1125ce3..a64b1d6f 100644
+--- a/app/src/main/cpp/waylandcomp/src/waylandcomp_jni.c
++++ b/app/src/main/cpp/waylandcomp/src/waylandcomp_jni.c
+@@ -27,6 +27,7 @@ extern void droiddeck_wayland_send_scene_input(int type, int a, int b);
+ extern void droiddeck_wayland_vsync(int64_t frame_time_ns);
+ extern void droiddeck_wayland_output_resized(void);
+ extern volatile int g_fps_limit;
++extern volatile int g_render_on_commit;
+ extern volatile int g_hide_shell;
+ extern volatile int g_zero_copy;
+ extern volatile unsigned g_zero_copy_last;
+@@ -553,6 +554,12 @@ Java_com_droiddeck_launcher_wayland_WaylandCompositor_nativeSetLookName(JNIEnv *
+     free(s);
+ }
+ 
++JNIEXPORT void JNICALL
++Java_com_droiddeck_launcher_wayland_WaylandCompositor_nativeSetRenderOnCommit(JNIEnv *env, jclass clazz, jboolean on) {
++    g_render_on_commit = on ? 1 : 0;
++    __android_log_print(ANDROID_LOG_INFO, TAG, "render on commit %s", on ? "on" : "off");
++}
++
+ JNIEXPORT void JNICALL
+ Java_com_droiddeck_launcher_wayland_WaylandCompositor_nativeSetFpsLimit(JNIEnv *env, jclass clazz, jint fps) {
+     g_fps_limit = fps > 0 ? fps : 0;
+diff --git a/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt b/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
+index dd49bcfd..3a3ff9b4 100644
+--- a/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
++++ b/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
+@@ -1266,6 +1266,10 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+                 probe.maxLuminance, probe.maxAverageLuminance, probe.minLuminance,
+                 probe.ratioAvailable, probe.ratio, Build.VERSION.SDK_INT,
+             )
++            // Zero-copy is not only an HDR feature: games present their own gralloc buffers on the
++            // display layer instead of being copied through the screen swapchain (flicker/edge
++            // artifacts). Enable it for every session; the compositor falls back if the driver refuses.
++            WaylandCompositor.nativeSetZeroCopy(true)
+             val wanted = SessionPrefs.hdr(this, mode)
+             val on = wanted && probe.reason == null
+             SessionState.hdr = on
+@@ -1282,7 +1286,7 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+         }
+         com.droiddeck.launcher.gpu.DriverSetupLog.write(this, "compositor.start driver=$driverId")
+         CompositorHost.startOrAttach(
+-            holder.surface, runtimeDir.path,
++            this, holder.surface, runtimeDir.path,
+             driverId?.let { turnip.driverPath(it) }, driverId?.let { turnip.libraryName(it) },
+             applicationInfo.nativeLibraryDir, size.first, size.second, refreshHz(), SessionState.fpsLimit,
+         )
+diff --git a/app/src/main/java/com/droiddeck/launcher/gpu/LinuxVulkanDriverManager.java b/app/src/main/java/com/droiddeck/launcher/gpu/LinuxVulkanDriverManager.java
+index 3973297c..58761619 100644
+--- a/app/src/main/java/com/droiddeck/launcher/gpu/LinuxVulkanDriverManager.java
++++ b/app/src/main/java/com/droiddeck/launcher/gpu/LinuxVulkanDriverManager.java
+@@ -45,7 +45,9 @@ public class LinuxVulkanDriverManager {
+     public boolean isInstalled(String id) {
+         if (id == null || id.isEmpty() || id.contains("/") || id.contains("..")) return false;
+         File dir = getDriverDir(id);
+-        return new File(dir, LIB_NAME).isFile() && new File(dir, ICD_NAME).isFile();
++        if (!new File(dir, ICD_NAME).isFile()) return false;
++        for (String name : STORED_NAMES) if (new File(dir, name).isFile()) return true;
++        return false;
+     }
+ 
+     public String getIcdPath(String id) {
+@@ -107,10 +109,10 @@ public class LinuxVulkanDriverManager {
+                     if (entry.isDirectory()) continue;
+                     String base = new File(entry.getName()).getName();
+                     if (base.isEmpty()) continue;
+-                    if (base.startsWith("libvulkan_freedreno") && base.endsWith(".so")) {
+-                        if (soName != null) Log.w(TAG, "zip has several libvulkan_freedreno*.so; using the first (" + soName + ")");
++                    if (isDriverLibrary(base)) {
++                        if (soName != null) Log.w(TAG, "zip has several driver libraries; using the first (" + soName + ")");
+                         else {
+-                            Files.copy(zis, new File(tmpDir, LIB_NAME).toPath(), StandardCopyOption.REPLACE_EXISTING);
++                            Files.copy(zis, new File(tmpDir, storedName(base)).toPath(), StandardCopyOption.REPLACE_EXISTING);
+                             soName = base;
+                         }
+                     } else if (base.equals(META_NAME)) {
+@@ -142,7 +144,8 @@ public class LinuxVulkanDriverManager {
+             if (soName == null) {
+                 throw new IllegalArgumentException(context.getString(R.string.lvd_no_library));
+             }
+-            File so = new File(tmpDir, LIB_NAME);
++            String stored = storedName(soName);
++            File so = new File(tmpDir, stored);
+             if (!isAarch64Elf(so)) {
+                 throw new IllegalArgumentException(context.getString(R.string.lvd_not_aarch64, soName));
+             }
+@@ -167,7 +170,7 @@ public class LinuxVulkanDriverManager {
+             JSONObject icd = new JSONObject();
+             icd.put("file_format_version", "1.0.0");
+             JSONObject icdBody = new JSONObject();
+-            icdBody.put("library_path", new File(dir, LIB_NAME).getAbsolutePath());
++            icdBody.put("library_path", new File(dir, stored).getAbsolutePath());
+             icdBody.put("api_version", "1.1.274");
+             icd.put("ICD", icdBody);
+             if (!FileUtils.writeString(new File(tmpDir, ICD_NAME), icd.toString(2))) throw new IOException("cannot write icd.json");
+@@ -180,6 +183,7 @@ public class LinuxVulkanDriverManager {
+             meta.put("libc", "glibc");
+             meta.put("minGlibc", minGlibc);
+             meta.put("sourceLibraryName", soName);
++            meta.put("libraryName", stored);
+             meta.put("importedAt", System.currentTimeMillis());
+             if (!FileUtils.writeString(new File(tmpDir, META_NAME), meta.toString(2))) throw new IOException("cannot write meta.json");
+ 
+@@ -198,6 +202,29 @@ public class LinuxVulkanDriverManager {
+         return id;
+     }
+ 
++    /**
++     * A Linux Vulkan driver's library as release zips name it: Turnip (freedreno) on Adreno, PanVK
++     * (panfrost) on Mali, RADV (radeon) on Xclipse. Whichever it is, it is installed as
++     * {@link #LIB_NAME}; the ICD manifest loads it by that absolute path.
++     */
++    /** The names an installed driver's library is kept under; Turnip keeps {@link #LIB_NAME}. */
++    private static final String[] STORED_NAMES = {LIB_NAME, "libvulkan_panfrost.so", "libvulkan_radeon.so"};
++
++    /**
++     * The name a driver library is installed under: its own driver's (PanVK, RADV), so the session
++     * log and the graphics report say which driver it is; a Turnip build keeps {@link #LIB_NAME}.
++     */
++    public static String storedName(String soName) {
++        if (soName != null && soName.startsWith("libvulkan_panfrost")) return "libvulkan_panfrost.so";
++        if (soName != null && soName.startsWith("libvulkan_radeon")) return "libvulkan_radeon.so";
++        return LIB_NAME;
++    }
++
++    public static boolean isDriverLibrary(String base) {
++        return base.endsWith(".so") && (base.startsWith("libvulkan_freedreno")
++                || base.startsWith("libvulkan_panfrost") || base.startsWith("libvulkan_radeon"));
++    }
++
+     static String sanitizeId(String name) {
+         String s = name.trim().replaceAll("[^A-Za-z0-9._-]+", "_").replaceAll("^[._]+", "");
+         if (s.length() > 64) s = s.substring(0, 64);
+diff --git a/app/src/main/java/com/droiddeck/launcher/runtime/ProotFastPath.kt b/app/src/main/java/com/droiddeck/launcher/runtime/ProotFastPath.kt
+index 08ca0366..3c0e85d9 100644
+--- a/app/src/main/java/com/droiddeck/launcher/runtime/ProotFastPath.kt
++++ b/app/src/main/java/com/droiddeck/launcher/runtime/ProotFastPath.kt
+@@ -1,6 +1,7 @@
+ package com.droiddeck.launcher.runtime
+ 
+ import android.content.Context
++import android.os.Build
+ import com.droiddeck.launcher.session.SessionPrefs
+ import java.io.File
+ import java.security.MessageDigest
+@@ -22,9 +23,10 @@ object ProotFastPath {
+ 
+     fun hostEnv(key: String): Pair<String, String> = "PROOT_FASTPATH" to key
+ 
+-    fun guestEnv(root: File, binds: List<String>, key: String): List<String> = listOf(
++    fun guestEnv(root: File, binds: List<String>, key: String, sdk: Int = Build.VERSION.SDK_INT): List<String> = listOf(
+         "PROOT_FP_ROOT=" + root.path,
+         "PROOT_FP_BINDS=" + binds.joinToString("|"),
+         "PROOT_FP_KEY=$key",
++        "PROOT_FP_ANDROID_API=$sdk",
+     )
+ }
+diff --git a/app/src/main/java/com/droiddeck/launcher/runtime/ProotFastPath.kt.orig b/app/src/main/java/com/droiddeck/launcher/runtime/ProotFastPath.kt.orig
+new file mode 100644
+index 00000000..08ca0366
+--- /dev/null
++++ b/app/src/main/java/com/droiddeck/launcher/runtime/ProotFastPath.kt.orig
+@@ -0,0 +1,30 @@
++package com.droiddeck.launcher.runtime
++
++import android.content.Context
++import com.droiddeck.launcher.session.SessionPrefs
++import java.io.File
++import java.security.MessageDigest
++
++object ProotFastPath {
++    const val LIBRARY = "/usr/local/lib/libblfastpath.so"
++    const val MAX_BINDS = 256
++
++    fun enabled(context: Context): Boolean =
++        SessionPrefs.prootFastPath(context) && !SessionPrefs.prootNoSeccomp(context) &&
++            LinuxRuntime.prootBinary(context).parent == context.applicationInfo.nativeLibraryDir
++
++    fun key(root: File, binds: List<String>): String? {
++        if (binds.size > MAX_BINDS || binds.any { it.contains('|') } || root.path.contains('|')) return null
++        val digest = MessageDigest.getInstance("SHA-256")
++            .digest((root.path + "\n" + binds.joinToString("\n")).toByteArray())
++        return digest.take(12).joinToString("") { "%02x".format(it) }
++    }
++
++    fun hostEnv(key: String): Pair<String, String> = "PROOT_FASTPATH" to key
++
++    fun guestEnv(root: File, binds: List<String>, key: String): List<String> = listOf(
++        "PROOT_FP_ROOT=" + root.path,
++        "PROOT_FP_BINDS=" + binds.joinToString("|"),
++        "PROOT_FP_KEY=$key",
++    )
++}
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
+index 6e206aad..10d552fd 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
+@@ -374,6 +374,8 @@ object SessionPrefs {
+     }
+ 
+     fun mangoapp(context: Context): Boolean = prefs(context).getBoolean("mangoapp", true)
++    fun vsyncThread(context: Context): Boolean = prefs(context).getBoolean("vsyncThread", true)
++    fun renderOnCommit(context: Context): Boolean = prefs(context).getBoolean("renderOnCommit", true)
+     fun setMangoapp(context: Context, on: Boolean) { prefs(context).edit().putBoolean("mangoapp", on).apply() }
+ 
+     fun zinkLazy(context: Context): Boolean = prefs(context).getBoolean("zinkLazy", true)
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt.orig b/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt.orig
+new file mode 100644
+index 00000000..6e206aad
+--- /dev/null
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt.orig
+@@ -0,0 +1,906 @@
++package com.droiddeck.launcher.session
++
++import android.content.Context
++import android.content.pm.ActivityInfo
++import androidx.annotation.StringRes
++import com.droiddeck.launcher.R
++import com.droiddeck.launcher.core.CpuAllocationDefaults
++import com.droiddeck.launcher.core.GameEnvironment
++import com.droiddeck.launcher.core.TextureFiltering
++import com.droiddeck.launcher.core.ZramSupport
++import com.droiddeck.launcher.gpu.Cardboard
++import com.droiddeck.launcher.gpu.ScreenEffects
++import org.json.JSONObject
++
++object SessionPrefs {
++    data class GameTextureFiltering(val anisotropy: Int? = null, val lodBias: String? = null)
++
++    const val SUSPEND_AUTO = "auto"
++    const val SUSPEND_NATIVE = "native"
++    const val SUSPEND_MANUAL = "manual"
++    const val SUSPEND_NEVER = "never"
++    private const val LEGACY_SUSPEND_DOWNLOADS = "downloads"
++    private const val STEAM_DOWNLOADS_IN_BACKGROUND = "steamDownloadsInBackground"
++
++    const val CONTROLLER_DECK = "deck"
++    const val CONTROLLER_XBOX360 = "xbox360"
++    const val CONTROLLER_STEAM = "steamcontroller"
++    const val CONTROLLER_DS4 = "dualshock4"
++    const val CONTROLLER_DUALSENSE = "dualsense"
++    const val OSC_AUTO = "auto"
++    const val OSC_ALWAYS = "always"
++    const val OSC_STEAM_QAM = "steam-qam"
++    const val OSC_NEVER = "never"
++    const val OSC_STEAM_TOUCH = "steam-touch"
++
++    val BACK_MENU_THEN_QAM = R.string.back_menu_then_qam
++    val BACK_QAM_THEN_MENU = R.string.back_qam_then_menu
++
++    @StringRes
++    fun backActionsOrder(inverted: Boolean): Int =
++        if (inverted) BACK_QAM_THEN_MENU else BACK_MENU_THEN_QAM
++
++    // Read through TolerantPrefs: a value stored with the wrong type falls back instead of throwing.
++    private fun prefs(context: Context): android.content.SharedPreferences =
++        TolerantPrefs(context.getSharedPreferences("session", Context.MODE_PRIVATE))
++
++    val orientationOptions = listOf(
++        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE to R.string.setup_orientation_auto,
++        ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE to R.string.setup_orientation_landscape,
++        ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE to R.string.setup_orientation_reverse,
++    )
++
++    fun orientation(context: Context): Int =
++        prefs(context).getInt("orientation", ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE)
++            .takeIf { value -> orientationOptions.any { it.first == value } }
++            ?: ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
++
++    fun setOrientation(context: Context, orientation: Int) {
++        require(orientationOptions.any { it.first == orientation })
++        prefs(context).edit().putInt("orientation", orientation).apply()
++    }
++
++    fun launcherFullscreen(context: Context): Boolean = prefs(context).getBoolean("launcherFullscreen", true)
++
++    fun setLauncherFullscreen(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("launcherFullscreen", on).apply()
++    }
++
++    fun animationsEnabled(context: Context): Boolean = prefs(context).getBoolean("animations", true)
++
++    fun setAnimationsEnabled(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("animations", on).apply()
++    }
++
++    fun gameStoresEnabled(context: Context): Boolean = prefs(context).getBoolean("gameStoresEnabled", true)
++
++    fun setGameStoresEnabled(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("gameStoresEnabled", on).apply()
++    }
++
++    fun gameStoresSpeedTier(context: Context): String = prefs(context).getString("gameStoresSpeedTier", "fast") ?: "fast"
++
++    fun setGameStoresSpeedTier(context: Context, tier: String) {
++        prefs(context).edit().putString("gameStoresSpeedTier", tier).apply()
++    }
++
++    /**
++     * Hidden A/B switch for the Epic installer: "adaptive" (default: native parallel fetch written
++     * straight into staged files), "lookahead" (the native ordered-lookahead engine that caches each
++     * chunk and copies it into staged files), "batch" (the older whole-cache native fetch, then
++     * native assembly; needs about twice the game's size free) or "java" (the bounded Java writer).
++     * No UI; set it in the `session` preferences for benchmarks.
++     */
++    fun storesEpicMode(context: Context): String = prefs(context).getString("storesEpicMode", "adaptive") ?: "adaptive"
++
++    fun storesOpenTab(context: Context): String =
++        prefs(context).getString("storesOpenTab", STORES_OPEN_LIBRARY)?.takeIf { it == STORES_OPEN_STORE } ?: STORES_OPEN_LIBRARY
++
++    fun setStoresOpenTab(context: Context, tab: String) {
++        prefs(context).edit().putString("storesOpenTab", if (tab == STORES_OPEN_STORE) STORES_OPEN_STORE else STORES_OPEN_LIBRARY).apply()
++    }
++
++    fun storesShowMature(context: Context): Boolean = prefs(context).getBoolean("storesShowMature", false)
++
++    fun setStoresShowMature(context: Context, show: Boolean) {
++        prefs(context).edit().putBoolean("storesShowMature", show).apply()
++    }
++
++    const val STORES_OPEN_LIBRARY = "library"
++    const val STORES_OPEN_STORE = "store"
++
++    fun storesInstallTarget(context: Context): String = prefs(context).getString("storesInstallTarget", "") ?: ""
++
++    fun setStoresInstallTarget(context: Context, path: String) {
++        prefs(context).edit().putString("storesInstallTarget", path).apply()
++    }
++
++    fun gameStoresParallel(context: Context): Int = prefs(context).getInt("gameStoresParallel", 1).coerceIn(1, 3)
++
++    fun setGameStoresParallel(context: Context, count: Int) {
++        prefs(context).edit().putInt("gameStoresParallel", count.coerceIn(1, 3)).apply()
++    }
++
++    fun hudEnabled(context: Context): Boolean = prefs(context).getBoolean(hudKey(context), !mangoappSession(context))
++
++    fun setHudEnabled(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean(hudKey(context), on).apply()
++    }
++
++    private fun hudKey(context: Context) = if (mangoappSession(context)) "hudDeck" else "hud"
++
++    private fun mangoappSession(context: Context) =
++        SessionState.mode == SessionService.MODE_STEAM && mangoapp(context)
++
++    fun backActionsInverted(context: Context): Boolean = prefs(context).getBoolean("backActionsInverted", false)
++
++    fun setBackActionsInverted(context: Context, inverted: Boolean) {
++        prefs(context).edit().putBoolean("backActionsInverted", inverted).apply()
++    }
++
++    const val TOUCH_AUTO = "auto"
++    const val TOUCH_PAD = "touchpad"
++    const val TOUCH_DIRECT = "direct"
++    const val TOUCH_OFF = "off"
++
++    fun touchMode(context: Context): String = prefs(context).getString("touch", TOUCH_AUTO) ?: TOUCH_AUTO
++
++    fun setTouchMode(context: Context, mode: String) {
++        prefs(context).edit().putString("touch", mode).apply()
++    }
++
++    const val SHAPE_AUTO = "auto"
++    const val SHAPE_WIDE = "16:9"
++    const val SHAPE_EXACT = "exact"
++
++    private fun shapeMode(context: Context): String =
++        prefs(context).getString("shape", null)
++            ?: if (context.packageManager.hasSystemFeature("android.hardware.sensor.hinge_angle")) SHAPE_WIDE else SHAPE_AUTO
++
++    fun oscMode(context: Context): String = prefs(context).getString("osc", OSC_AUTO) ?: OSC_AUTO
++
++    fun setOscMode(context: Context, mode: String) {
++        prefs(context).edit().putString("osc", mode).apply()
++    }
++
++    fun linuxDriver(context: Context): String =
++        prefs(context).getString("linuxDriver", null)
++            ?: prefs(context).getString("linuxDriver.steam", null)
++            ?: prefs(context).getString("linuxDriver.desktop", "") ?: ""
++
++    fun setLinuxDriver(context: Context, id: String) {
++        prefs(context).edit().putString("linuxDriver", id).apply()
++    }
++
++    const val GPU_DRIVERS_AUTO = "auto"
++    const val GPU_DRIVERS_MANUAL = "manual"
++
++    fun gpuDriverMode(context: Context): String =
++        prefs(context).getString("gpuDriverMode", GPU_DRIVERS_AUTO) ?: GPU_DRIVERS_AUTO
++
++    fun setGpuDriverMode(context: Context, mode: String) {
++        prefs(context).edit().putString("gpuDriverMode", mode).apply()
++    }
++
++    fun settleGpuDriverMode(context: Context) {
++        val p = prefs(context)
++        if (p.contains("gpuDriverMode")) return
++        val chosen = androidDriver(context).isNotEmpty() || linuxDriver(context).isNotEmpty()
++        p.edit().putString("gpuDriverMode", if (chosen) GPU_DRIVERS_MANUAL else GPU_DRIVERS_AUTO).apply()
++    }
++
++    fun gpuAutoInstalled(context: Context): Set<String> =
++        prefs(context).getStringSet("gpuAutoInstalled", emptySet()).orEmpty()
++
++    fun setGpuAutoInstalled(context: Context, ids: Set<String>) {
++        prefs(context).edit().putStringSet("gpuAutoInstalled", ids.toSet()).apply()
++    }
++
++
++    fun stretch16x9(context: Context): Boolean = prefs(context).getBoolean("stretch16x9", false)
++
++    fun setStretch16x9(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("stretch16x9", on).apply()
++    }
++
++
++    fun directAudio(context: Context): Boolean = prefs(context).getBoolean("directAudio", true)
++
++    fun setDirectAudio(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("directAudio", on).apply()
++    }
++
++    fun micEnabled(context: Context): Boolean = prefs(context).getBoolean("mic", false)
++
++    fun micAsked(context: Context): Boolean = prefs(context).getBoolean("micAsked", false)
++
++    fun setMicAsked(context: Context) {
++        prefs(context).edit().putBoolean("micAsked", true).apply()
++    }
++
++    fun setMicEnabled(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("mic", on).apply()
++    }
++
++    fun wifiDiscoveryEnabled(context: Context): Boolean = prefs(context).getBoolean("wifiDiscovery", false)
++
++    fun setWifiDiscoveryEnabled(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("wifiDiscovery", on).apply()
++    }
++
++    fun wifiDiscoveryAsked(context: Context): Boolean = prefs(context).getBoolean("wifiDiscoveryAsked", false)
++
++    fun setWifiDiscoveryAsked(context: Context) {
++        prefs(context).edit().putBoolean("wifiDiscoveryAsked", true).apply()
++    }
++
++    internal data class CoreAllocation(val clientOverride: Boolean, val clientCpus: String, val gameCpus: String)
++
++    internal fun coreAllocation(context: Context, defaults: CpuAllocationDefaults.Allocation? = CpuAllocationDefaults.device): CoreAllocation {
++        val saved = prefs(context)
++        return CoreAllocation(
++            saved.getBoolean("clientCpusOverride", defaults != null && !saved.contains("clientCpus")),
++            saved.getString("clientCpus", defaults?.client.orEmpty()).orEmpty(),
++            saved.getString("gameCpus", defaults?.game.orEmpty()).orEmpty(),
++        )
++    }
++
++    fun clientCpusOverride(context: Context): Boolean = coreAllocation(context).clientOverride
++
++    fun setClientCpusOverride(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("clientCpusOverride", on).apply()
++    }
++
++    fun clientCpus(context: Context): String = coreAllocation(context).clientCpus
++
++    fun setClientCpus(context: Context, list: String) {
++        prefs(context).edit().putString("clientCpus", list).apply()
++    }
++
++    fun gameCpus(context: Context): String = coreAllocation(context).gameCpus
++
++    fun setGameCpus(context: Context, list: String) {
++        prefs(context).edit().putString("gameCpus", list).apply()
++    }
++
++    fun noXalia(context: Context): Boolean = prefs(context).getBoolean("noXalia", true)
++
++    fun setNoXalia(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("noXalia", on).apply()
++    }
++
++    fun fastSync(context: Context): Boolean = prefs(context).getBoolean("fastSync", false)
++
++    fun setFastSync(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("fastSync", on).apply()
++    }
++
++    fun fsyncFirst(context: Context): Boolean = prefs(context).getBoolean("fsyncFirst", false)
++
++    fun setFsyncFirst(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("fsyncFirst", on).apply()
++    }
++
++    const val SYNC_ESYNC = "esync"
++    const val SYNC_NTSYNC = "ntsync"
++    const val SYNC_FSYNC = "fsync"
++    const val SYNC_WINESERVER = "wineserver"
++
++    fun syncBackend(context: Context): String = syncBackendOf(fastSync(context), fsyncFirst(context), syncFallback(context))
++
++    fun syncBackendOf(fastSync: Boolean, fsyncFirst: Boolean, syncFallback: Boolean): String = when {
++        fastSync -> SYNC_NTSYNC
++        fsyncFirst -> SYNC_FSYNC
++        syncFallback -> SYNC_ESYNC
++        else -> SYNC_WINESERVER
++    }
++
++    fun setSyncBackend(context: Context, backend: String) {
++        require(backend == SYNC_ESYNC || backend == SYNC_NTSYNC || backend == SYNC_FSYNC || backend == SYNC_WINESERVER) { "unknown sync $backend" }
++        prefs(context).edit()
++            .putBoolean("fastSync", backend == SYNC_NTSYNC)
++            .putBoolean("fsyncFirst", backend == SYNC_FSYNC)
++            .putBoolean("syncFallback", backend != SYNC_WINESERVER)
++            .apply()
++    }
++
++    fun syncFallback(context: Context): Boolean = prefs(context).getBoolean("syncFallback", true)
++
++    fun setSyncFallback(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("syncFallback", on).apply()
++    }
++
++    fun gamescopeRealtime(context: Context): Boolean = prefs(context).getBoolean("gamescopeRealtime", false)
++
++    fun setGamescopeRealtime(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("gamescopeRealtime", on).apply()
++    }
++
++    fun gpuClockPin(context: Context): Boolean = prefs(context).getBoolean("gpuClockPin", false)
++
++    fun setGpuClockPin(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("gpuClockPin", on).apply()
++    }
++
++    fun prootNoSeccomp(context: Context): Boolean = prefs(context).getBoolean("prootNoSeccomp", false)
++
++    fun setProotNoSeccomp(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("prootNoSeccomp", on).apply()
++    }
++
++    fun prootFastPath(context: Context): Boolean = prefs(context).getBoolean("prootFastPath", true)
++
++    fun setProotFastPath(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("prootFastPath", on).apply()
++    }
++
++    const val DEFAULT_GUEST_HOSTNAME = "DroidDeck"
++
++    @JvmStatic
++    fun guestHostname(context: Context): String =
++        validGuestHostname(prefs(context).getString("guestHostname", null)) ?: DEFAULT_GUEST_HOSTNAME
++
++    fun setGuestHostname(context: Context, name: String) {
++        val valid = validGuestHostname(name)
++        prefs(context).edit().apply { if (valid == null) remove("guestHostname") else putString("guestHostname", valid) }.apply()
++    }
++
++    fun validGuestHostname(name: String?): String? {
++        val trimmed = name?.trim() ?: return null
++        return trimmed.takeIf { Regex("[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?").matches(it) }
++    }
++
++    fun tuSysmem(context: Context): Boolean = prefs(context).getBoolean("tuSysmem", true)
++
++    fun setTuSysmem(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("tuSysmem", on).apply()
++    }
++
++    fun glThread(context: Context): Boolean = prefs(context).getBoolean("glThread", true)
++    fun setGlThread(context: Context, on: Boolean) { prefs(context).edit().putBoolean("glThread", on).apply() }
++
++    fun noGlError(context: Context): Boolean = prefs(context).getBoolean("noGlError", true)
++    fun setNoGlError(context: Context, on: Boolean) { prefs(context).edit().putBoolean("noGlError", on).apply() }
++
++    fun steamController(context: Context): String =
++        prefs(context).getString("steamController", CONTROLLER_DECK) ?: CONTROLLER_DECK
++    fun setSteamController(context: Context, id: String) { prefs(context).edit().putString("steamController", id).apply() }
++    fun padType(id: String): Int = when (id) {
++        CONTROLLER_STEAM -> com.droiddeck.launcher.input.FakeInputWriter.PAD_TYPE_STEAM
++        CONTROLLER_XBOX360 -> com.droiddeck.launcher.input.FakeInputWriter.PAD_TYPE_XBOX
++        CONTROLLER_DS4 -> com.droiddeck.launcher.input.FakeInputWriter.PAD_TYPE_DS4
++        CONTROLLER_DUALSENSE -> com.droiddeck.launcher.input.FakeInputWriter.PAD_TYPE_DUALSENSE
++        else -> com.droiddeck.launcher.input.FakeInputWriter.PAD_TYPE_DECK
++    }
++
++    fun mangoapp(context: Context): Boolean = prefs(context).getBoolean("mangoapp", true)
++    fun setMangoapp(context: Context, on: Boolean) { prefs(context).edit().putBoolean("mangoapp", on).apply() }
++
++    fun zinkLazy(context: Context): Boolean = prefs(context).getBoolean("zinkLazy", true)
++
++    /**
++     * The Mali bridge (experimental): the session's Vulkan goes through the app's bridge server to
++     * the phone's own driver instead of Turnip (external/MaliBridge). Only offered, and only used, on a
++     * GPU without Adreno's KGSL. Off by default, except in the MaliBridge build (DroidDeck Mali,
++     * an applicationId ending in ".mali"), which is only for Mali devices.
++     */
++    @JvmStatic
++    fun vkBridge(context: Context): Boolean =
++        prefs(context).getBoolean("vkBridge", context.packageName.endsWith(".mali"))
++
++    fun setVkBridge(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("vkBridge", on).apply()
++    }
++
++    /**
++     * The Mali bridge's safe mode, on by default: the bridge keeps its proven workarounds wherever
++     * its startup probe has not verified this GPU and driver. Off is performance mode (native paths
++     * wherever the probe passed). Reaches the server as <cache dir>/mode (VkBridgeComponent) and
++     * the guest as VKBRIDGE_MODE (SessionService).
++     */
++    @JvmStatic
++    /**
++     * The player declined the automatic DXVK for bridge sessions (ComponentsManager.bridgeDxvk): every
++     * Proton keeps its own DXVK, even where this GPU's Vulkan may be too old for it.
++     */
++    fun bridgeProtonDxvk(context: Context): Boolean = prefs(context).getBoolean("bridgeProtonDxvk", false)
++
++    fun setBridgeProtonDxvk(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("bridgeProtonDxvk", on).apply()
++    }
++
++    /** Setup's "Steam menus" for the Mali bridge: "auto" (software on older Malis), "gpu" or "software". */
++    fun steamMenus(context: Context): String = prefs(context).getString("steamMenus", "auto") ?: "auto"
++
++    fun setSteamMenus(context: Context, mode: String) {
++        prefs(context).edit().putString("steamMenus", mode).apply()
++    }
++
++    fun vkBridgeSafe(context: Context): Boolean = prefs(context).getBoolean("vkBridgeSafe", true)
++
++    fun setVkBridgeSafe(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("vkBridgeSafe", on).apply()
++    }
++
++    /** The bridge's mode as the server and the client read it: "safe" or "performance". */
++    @JvmStatic
++    fun vkBridgeMode(context: Context): String = if (vkBridgeSafe(context)) "safe" else "performance"
++
++    fun setZinkLazy(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("zinkLazy", on).apply()
++    }
++
++    @JvmStatic
++    fun androidDriver(context: Context): String = prefs(context).getString("androidDriver", "") ?: ""
++
++    @JvmStatic
++    fun setAndroidDriver(context: Context, id: String) {
++        prefs(context).edit().putString("androidDriver", id).apply()
++    }
++
++
++    fun romsDir(context: Context): String =
++        prefs(context).getString("romsDir", "") ?: ""
++
++    fun setRomsDir(context: Context, path: String) {
++        prefs(context).edit().putString("romsDir", path).apply()
++    }
++
++    fun logsEnabled(context: Context): Boolean =
++        prefs(context).getBoolean("logs", true)
++
++    fun setLogsEnabled(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("logs", on).apply()
++    }
++
++    fun storageDiagnosticsEnabled(context: Context): Boolean =
++        prefs(context).getBoolean("storageDiagnostics", false)
++
++    fun setStorageDiagnosticsEnabled(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("storageDiagnostics", on).apply()
++    }
++
++
++    private fun resolutionCap(context: Context, mode: String): Int = prefs(context).getInt("resolutionCap.$mode", 720)
++
++    fun resolutionChosen(context: Context, mode: String): Boolean =
++        prefs(context).contains("displayResolution.$mode") ||
++            prefs(context).contains("resolutionCap.$mode") || customResolution(context, mode) != null
++
++    fun resolutionChoice(context: Context, mode: String, panel: Pair<Int, Int>): String {
++        val saved = prefs(context)
++        saved.getString("displayResolution.$mode", null)?.let { value ->
++            if (value == SessionDisplay.MATCH_SCREEN || value == SessionDisplay.FOLLOW_SCREEN ||
++                SessionDisplay.presetHeight(value) != null) return value
++            parseResolution(value)?.let { return "${it.first}x${it.second}" }
++        }
++        if (!resolutionChosen(context, mode) && !saved.contains("shape")) return SessionDisplay.DEFAULT_RESOLUTION
++        val legacy = SessionDisplay.resolve(panel, resolutionCap(context, mode), shapeMode(context), customResolution(context, mode))
++        return if (legacy == SessionDisplay.screenSize(panel)) SessionDisplay.MATCH_SCREEN
++        else "${legacy.first}x${legacy.second}"
++    }
++
++    fun setResolutionChoice(context: Context, mode: String, choice: String) {
++        val value = if (choice == SessionDisplay.MATCH_SCREEN || choice == SessionDisplay.FOLLOW_SCREEN ||
++                SessionDisplay.presetHeight(choice) != null) choice else {
++            val size = requireNotNull(parseResolution(choice)) { "Invalid resolution" }
++            "${size.first}x${size.second}"
++        }
++        prefs(context).edit().putString("displayResolution.$mode", value).apply()
++    }
++
++    fun fexPreset(context: Context): String = prefs(context).getString("fexPreset", DEFAULT_FEX_PRESET) ?: DEFAULT_FEX_PRESET
++
++    const val DEFAULT_FEX_PRESET = "PERFORMANCE_TSO"
++
++    fun forceSsbs(context: Context): Boolean = prefs(context).getBoolean("forceSsbs", false)
++
++    fun setForceSsbs(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("forceSsbs", on).apply()
++        runCatching { GameEnvironmentStore.publish(context) }
++            .onFailure { android.util.Log.e("GameEnvironment", "Could not update game environment", it) }
++    }
++
++    fun setFexPreset(context: Context, id: String) {
++        prefs(context).edit().putString("fexPreset", id).apply()
++        runCatching { GameEnvironmentStore.publish(context) }
++            .onFailure { android.util.Log.e("GameEnvironment", "Could not update game environment", it) }
++    }
++
++    fun runSteamAtStartup(context: Context): Boolean = prefs(context).getBoolean("runSteamAtStartup", false)
++
++    fun setRunSteamAtStartup(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("runSteamAtStartup", on).apply()
++    }
++
++    fun addedGamesDirs(context: Context): List<String> {
++        val p = prefs(context)
++        val list = p.getString("addedGamesDirs", null)
++        if (list != null) return list.split('\n').filter { it.isNotEmpty() }
++        val old = p.getString("addedGamesDir", "") ?: ""
++        return if (old.isEmpty()) emptyList() else listOf(old)
++    }
++
++    fun setAddedGamesDirs(context: Context, dirs: List<String>) {
++        prefs(context).edit().putString("addedGamesDirs", dirs.distinct().joinToString("\n")).remove("addedGamesDir").apply()
++    }
++
++    fun gameFolderBinds(context: Context): List<Pair<String, String>> =
++        (prefs(context).getString("gameFolderBinds", "") ?: "").split('\n').mapNotNull { line ->
++            line.split('\t').takeIf { it.size == 2 && it[0].isNotEmpty() && it[1].isNotEmpty() }?.let { it[0] to it[1] }
++        }
++
++    fun setGameFolderBinds(context: Context, binds: List<Pair<String, String>>) {
++        prefs(context).edit().putString("gameFolderBinds", binds.distinctBy { it.first }.joinToString("\n") { "${it.first}\t${it.second}" }).apply()
++    }
++
++    fun gamesFoldersMigrated(context: Context): Boolean = prefs(context).getBoolean("gamesFoldersMigrated", false)
++
++    fun setGamesFoldersMigrated(context: Context) {
++        prefs(context).edit().putBoolean("gamesFoldersMigrated", true).apply()
++    }
++
++    fun removedAddedGames(context: Context): List<String> =
++        (prefs(context).getString("removedAddedGames", "") ?: "").split('\n').filter { it.isNotEmpty() }
++
++    fun setAddedGameRemoved(context: Context, folderPath: String, removed: Boolean) {
++        synchronized(addedGameLock) {
++            val now = removedAddedGames(context).filter { it != folderPath } + listOfNotNull(folderPath.takeIf { removed })
++            prefs(context).edit().putString("removedAddedGames", now.joinToString("\n")).apply()
++        }
++    }
++
++    fun addedGameName(context: Context, folderPath: String): String = prefs(context).getString("addedName:$folderPath", "") ?: ""
++
++    fun setAddedGameName(context: Context, folderPath: String, name: String) {
++        prefs(context).edit().putString("addedName:$folderPath", name.trim()).apply()
++    }
++
++    fun addedGameStartIn(context: Context, folderPath: String): String = prefs(context).getString("addedStartIn:$folderPath", "") ?: ""
++
++    fun setAddedGameStartIn(context: Context, folderPath: String, guestDir: String) {
++        prefs(context).edit().putString("addedStartIn:$folderPath", guestDir.trim()).apply()
++    }
++
++    fun addedGameLaunch(context: Context, folderPath: String): String = prefs(context).getString("addedLaunch:$folderPath", "") ?: ""
++
++    fun setAddedGameLaunch(context: Context, folderPath: String, options: String) {
++        prefs(context).edit().putString("addedLaunch:$folderPath", options.trim()).apply()
++    }
++
++    fun addedGameAdopted(context: Context, folderPath: String, field: String): String? =
++        prefs(context).getString("addedAdopted:$field:$folderPath", null)
++
++    fun setAddedGameAdopted(context: Context, folderPath: String, field: String, value: String) {
++        prefs(context).edit().putString("addedAdopted:$field:$folderPath", value).apply()
++    }
++
++    fun addedGameArtSource(context: Context, folderPath: String, slot: String): String =
++        prefs(context).getString("addedArt:$slot:$folderPath", "") ?: ""
++
++    fun setAddedGameArtSource(context: Context, folderPath: String, slot: String, source: String) {
++        prefs(context).edit().putString("addedArt:$slot:$folderPath", source).apply()
++    }
++
++    fun addedGamesArt(context: Context): Boolean = prefs(context).getBoolean("addedGamesArt", true)
++
++    fun setAddedGamesArt(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("addedGamesArt", on).apply()
++    }
++
++    fun addedGameExe(context: Context, folderPath: String): String = prefs(context).getString("addedExe:$folderPath", "") ?: ""
++
++    private val addedGameLock = Any()
++
++    fun setAddedGameExe(context: Context, folderPath: String, path: String) {
++        synchronized(addedGameLock) { prefs(context).edit().putString("addedExe:$folderPath", path).apply() }
++    }
++
++    fun addedGameExeSeen(context: Context, folderPath: String): Int = prefs(context).getInt("addedExeSeen:$folderPath", 0)
++
++    fun adoptAddedGameExe(context: Context, folderPath: String, expected: String, path: String, seen: Int): Boolean =
++        synchronized(addedGameLock) {
++            val unchanged = addedGameExe(context, folderPath) == expected
++            if (unchanged) prefs(context).edit().putString("addedExe:$folderPath", path).putInt("addedExeSeen:$folderPath", seen).apply()
++            unchanged
++        }
++
++    fun addedGameStoredAppId(context: Context, folderPath: String): Long? =
++        prefs(context).getLong("addedAppId:$folderPath", 0L).takeIf { it != 0L }
++
++    fun addedGameAppId(context: Context, folderPath: String, first: Long): Long = synchronized(addedGameLock) {
++        val p = prefs(context)
++        p.getLong("addedAppId:$folderPath", 0L).takeIf { it != 0L }
++            ?: first.also { p.edit().putLong("addedAppId:$folderPath", it).apply() }
++    }
++
++    fun theme(context: Context): String = prefs(context).getString("theme", "graphite") ?: "graphite"
++
++    fun setTheme(context: Context, id: String) {
++        prefs(context).edit().putString("theme", id).apply()
++    }
++
++    private fun customResolution(context: Context, mode: String): Pair<Int, Int>? =
++        parseResolution(prefs(context).getString("customRes.$mode", null))
++
++    fun parseResolution(text: String?): Pair<Int, Int>? {
++        val parts = text?.trim()?.split('x', 'X', '×', '*')?.map { it.trim() } ?: return null
++        if (parts.size != 2) return null
++        val w = parts[0].toIntOrNull() ?: return null
++        val h = parts[1].toIntOrNull() ?: return null
++        if (w !in 320..3840 || h !in 240..2160) return null
++        return Pair(w and 1.inv(), h and 1.inv())
++    }
++
++    fun hdr(context: Context, mode: String): Boolean = prefs(context).getBoolean("hdr.$mode", false)
++
++    fun setHdr(context: Context, mode: String, on: Boolean) {
++        prefs(context).edit().putBoolean("hdr.$mode", on).apply()
++    }
++
++    fun fpsLimit(context: Context, mode: String): Int = prefs(context).getInt("fpsLimit.$mode", 0)
++
++    fun setFpsLimit(context: Context, mode: String, fps: Int) {
++        prefs(context).edit().putInt("fpsLimit.$mode", fps.coerceAtLeast(0)).apply()
++    }
++
++    val fpsLimitChoices = listOf(0 to "Off", 30 to "30", 40 to "40", 45 to "45", 60 to "60", 90 to "90", 120 to "120")
++
++    fun fpsLimitChoices(context: Context): List<Pair<Int, String>> =
++        fpsLimitChoices.map { (fps, label) -> fps to if (fps == 0) context.getString(R.string.frame_gen_off) else label }
++
++    val upscalerChoices = listOf(
++        0 to "Linear", 2 to "Nearest", 4 to "AMD FSR 1", 3 to "Snapdragon GSR",
++        8 to "Snapdragon GSR (quality)", 7 to "NVIDIA NIS", 6 to "Sharpen only",
++    )
++
++    private val upscalerLabels = mapOf(
++        0 to R.string.sprefs_upscaler_linear, 2 to R.string.sprefs_upscaler_nearest,
++        8 to R.string.sprefs_upscaler_gsr_quality, 6 to R.string.sprefs_upscaler_sharpen,
++    )
++
++    fun upscalerChoices(context: Context): List<Pair<Int, String>> =
++        upscalerChoices.map { (mode, label) -> mode to (upscalerLabels[mode]?.let(context::getString) ?: label) }
++
++    fun canonicalUpscaler(mode: Int): Int = when (mode) {
++        1 -> 0
++        5 -> 4
++        else -> mode.takeIf { m -> upscalerChoices.any { it.first == m } } ?: 0
++    }
++
++    fun upscalerHasSharpness(mode: Int): Boolean = canonicalUpscaler(mode) in 3..8
++
++    fun upscaler(context: Context): Int = canonicalUpscaler(prefs(context).getInt("upscaler", 0))
++
++    fun setUpscaler(context: Context, mode: Int) {
++        prefs(context).edit().putInt("upscaler", canonicalUpscaler(mode)).apply()
++    }
++
++    fun upscaleSharpness(context: Context): Int = prefs(context).getInt("upscaleSharpness", 75).coerceIn(0, 100)
++
++    fun setUpscaleSharpness(context: Context, pct: Int) {
++        prefs(context).edit().putInt("upscaleSharpness", pct.coerceIn(0, 100)).apply()
++    }
++
++
++    fun screenEffects(context: Context): ScreenEffects {
++        val text = prefs(context).getString("screenEffects", null) ?: return ScreenEffects.OFF
++        return runCatching { ScreenEffects.decode(JSONObject(text)) }.getOrDefault(ScreenEffects.OFF)
++    }
++
++    fun setScreenEffects(context: Context, effects: ScreenEffects) {
++        prefs(context).edit().putString("screenEffects", effects.encode().toString()).apply()
++    }
++
++    const val CARDBOARD_KEY = "cardboard"
++
++    fun cardboard(context: Context): Cardboard {
++        val text = prefs(context).getString(CARDBOARD_KEY, null) ?: return Cardboard.OFF
++        return runCatching { Cardboard.decode(JSONObject(text)) }.getOrDefault(Cardboard.OFF)
++    }
++
++    fun setCardboard(context: Context, cardboard: Cardboard) {
++        prefs(context).edit().putString(CARDBOARD_KEY, cardboard.encode().toString()).apply()
++    }
++
++    fun cardboardSourceBeforeSteamVr(context: Context): Int = prefs(context).getInt("cardboardSourceBeforeSteamVr", -1)
++
++    fun setCardboardSourceBeforeSteamVr(context: Context, source: Int) {
++        prefs(context).edit().putInt("cardboardSourceBeforeSteamVr", source).apply()
++    }
++
++    fun sessionPrefs(context: Context): android.content.SharedPreferences = prefs(context)
++
++    val textureAnisotropyChoices = TextureFiltering.ANISOTROPY.map { it to if (it == 0) "Off" else "${it}x" }
++
++    fun textureAnisotropyChoices(context: Context): List<Pair<Int, String>> =
++        textureAnisotropyChoices.map { (value, label) -> value to if (value == 0) context.getString(R.string.frame_gen_off) else label }
++
++    val textureLodBiasChoices = TextureFiltering.LOD_BIAS.map {
++        it to when (it) {
++            TextureFiltering.LOD_BIAS_OFF -> "Off"
++            TextureFiltering.LOD_BIAS_AUTO -> "Auto (match scaling)"
++            else -> it
++        }
++    }
++
++    fun textureLodBiasChoices(context: Context): List<Pair<String, String>> = textureLodBiasChoices.map { (value, label) ->
++        value to when (value) {
++            TextureFiltering.LOD_BIAS_OFF -> context.getString(R.string.frame_gen_off)
++            TextureFiltering.LOD_BIAS_AUTO -> context.getString(R.string.sprefs_lod_bias_auto)
++            else -> label
++        }
++    }
++
++    fun textureAnisotropy(context: Context): Int =
++        prefs(context).getInt("textureAnisotropy", 0).takeIf { it in TextureFiltering.ANISOTROPY } ?: 0
++
++    fun setTextureAnisotropy(context: Context, value: Int) {
++        prefs(context).edit().putInt("textureAnisotropy", value).apply()
++        publishGameEnvironment(context)
++    }
++
++    fun textureLodBias(context: Context): String =
++        prefs(context).getString("textureLodBias", null)?.takeIf { it in TextureFiltering.LOD_BIAS } ?: TextureFiltering.LOD_BIAS_OFF
++
++    fun setTextureLodBias(context: Context, choice: String) {
++        prefs(context).edit().putString("textureLodBias", choice).apply()
++        publishGameEnvironment(context)
++    }
++
++    fun gameTextureFiltering(context: Context, scope: String): GameTextureFiltering {
++        require(GameEnvironment.validScope(scope))
++        return gameTextureFiltering(context)[scope] ?: GameTextureFiltering()
++    }
++
++    fun gameTextureFiltering(context: Context): Map<String, GameTextureFiltering> {
++        val json = runCatching {
++            JSONObject(prefs(context).getString("gameTextureFiltering", null) ?: "{}")
++        }.getOrElse { JSONObject() }
++        return buildMap {
++            json.keys().forEach { scope ->
++                if (!GameEnvironment.validScope(scope)) return@forEach
++                val entry = json.optJSONObject(scope) ?: return@forEach
++                val anisotropy = entry.optInt("anisotropy").takeIf {
++                    entry.has("anisotropy") && it in TextureFiltering.ANISOTROPY
++                }
++                val lodBias = entry.optString("lodBias").takeIf {
++                    entry.has("lodBias") && it in TextureFiltering.LOD_BIAS
++                }
++                if (anisotropy != null || lodBias != null) {
++                    put(scope, GameTextureFiltering(anisotropy, lodBias))
++                }
++            }
++        }
++    }
++
++    fun setGameTextureAnisotropy(context: Context, scope: String, value: Int?) {
++        require(value == null || value in TextureFiltering.ANISOTROPY)
++        updateGameTextureFiltering(context, scope) { it.copy(anisotropy = value) }
++    }
++
++    fun setGameTextureLodBias(context: Context, scope: String, choice: String?) {
++        require(choice == null || choice in TextureFiltering.LOD_BIAS)
++        updateGameTextureFiltering(context, scope) { it.copy(lodBias = choice) }
++    }
++
++    fun clearGameTextureFiltering(context: Context, scope: String) {
++        require(GameEnvironment.validScope(scope))
++        val choices = gameTextureFiltering(context).toMutableMap()
++        if (choices.remove(scope) == null) return
++        saveGameTextureFiltering(context, choices)
++        publishGameEnvironment(context)
++    }
++
++    private fun updateGameTextureFiltering(
++        context: Context,
++        scope: String,
++        change: (GameTextureFiltering) -> GameTextureFiltering,
++    ) {
++        require(GameEnvironment.validScope(scope))
++        val choices = gameTextureFiltering(context).toMutableMap()
++        val next = change(choices[scope] ?: GameTextureFiltering())
++        if (next.anisotropy == null && next.lodBias == null) choices.remove(scope) else choices[scope] = next
++        saveGameTextureFiltering(context, choices)
++        publishGameEnvironment(context)
++    }
++
++    private fun saveGameTextureFiltering(context: Context, choices: Map<String, GameTextureFiltering>) {
++        val json = JSONObject()
++        choices.forEach { (id, choice) ->
++            json.put(id, JSONObject().apply {
++                choice.anisotropy?.let { put("anisotropy", it) }
++                choice.lodBias?.let { put("lodBias", it) }
++            })
++        }
++        prefs(context).edit().putString("gameTextureFiltering", json.toString()).apply()
++    }
++
++    private fun publishGameEnvironment(context: Context) {
++        runCatching { GameEnvironmentStore.publish(context) }
++            .onFailure { android.util.Log.e("GameEnvironment", "Could not update game environment", it) }
++    }
++
++    fun prefMode(mode: String): String = if (mode == SessionService.MODE_RUN) SessionService.MODE_STEAM else mode
++
++    fun pipAutoEnter(context: Context): Boolean = prefs(context).getBoolean("pipAutoEnter", false)
++
++    fun setPipAutoEnter(context: Context, enabled: Boolean) {
++        prefs(context).edit().putBoolean("pipAutoEnter", enabled).apply()
++    }
++
++    fun unfoldedControls(context: Context): Boolean = prefs(context).getBoolean("unfoldedControls", false)
++
++    fun setUnfoldedControls(context: Context, enabled: Boolean) {
++        prefs(context).edit().putBoolean("unfoldedControls", enabled).apply()
++    }
++
++    const val SURFACE_STICK = "stick"
++    const val SURFACE_TRACKPAD = "trackpad"
++
++    fun gamepadSurface(context: Context, right: Boolean): String =
++        prefs(context).getString(if (right) "gamepadRight" else "gamepadLeft", null)
++            ?: if (right) SURFACE_TRACKPAD else SURFACE_STICK
++
++    fun setGamepadSurface(context: Context, right: Boolean, surface: String) {
++        prefs(context).edit().putString(if (right) "gamepadRight" else "gamepadLeft", surface).apply()
++    }
++
++    fun suspendPolicy(context: Context, mode: String): String =
++        prefs(context).getString("suspendPolicy.${prefMode(mode)}", SUSPEND_MANUAL)
++            ?.let { if (it == LEGACY_SUSPEND_DOWNLOADS) SUSPEND_AUTO else it }
++            ?.takeIf { it in setOf(SUSPEND_AUTO, SUSPEND_NATIVE, SUSPEND_MANUAL, SUSPEND_NEVER) }
++            ?.let { if (mode != SessionService.MODE_STEAM && it == SUSPEND_NATIVE) SUSPEND_AUTO else it }
++            ?: SUSPEND_MANUAL
++
++    fun setSuspendPolicy(context: Context, mode: String, policy: String) {
++        val normalized = policy.takeIf { it in setOf(SUSPEND_AUTO, SUSPEND_MANUAL, SUSPEND_NEVER) ||
++            (it == SUSPEND_NATIVE && mode == SessionService.MODE_STEAM) }
++            ?: SUSPEND_MANUAL
++        val prefs = prefs(context)
++        val key = "suspendPolicy.${prefMode(mode)}"
++        prefs.edit().apply {
++            if (mode == SessionService.MODE_STEAM && prefs.getString(key, null) == LEGACY_SUSPEND_DOWNLOADS) {
++                putBoolean(STEAM_DOWNLOADS_IN_BACKGROUND, true)
++            }
++            putString(key, normalized)
++        }.apply()
++    }
++
++    fun steamDownloadsInBackground(context: Context): Boolean {
++        val prefs = prefs(context)
++        return prefs.getBoolean(STEAM_DOWNLOADS_IN_BACKGROUND, false) ||
++            prefs.getString("suspendPolicy.${SessionService.MODE_STEAM}", null) == LEGACY_SUSPEND_DOWNLOADS
++    }
++
++    fun setSteamDownloadsInBackground(context: Context, enabled: Boolean) {
++        val prefs = prefs(context)
++        val policyKey = "suspendPolicy.${SessionService.MODE_STEAM}"
++        prefs.edit().apply {
++            putBoolean(STEAM_DOWNLOADS_IN_BACKGROUND, enabled)
++            if (prefs.getString(policyKey, null) == LEGACY_SUSPEND_DOWNLOADS) {
++                putString(policyKey, SUSPEND_AUTO)
++            }
++        }.apply()
++    }
++
++    fun zramCompression(context: Context): Boolean {
++        val prefs = prefs(context)
++        return if (prefs.contains("zramCompression")) prefs.getBoolean("zramCompression", false) else ZramSupport.recommended(context)
++    }
++
++    fun setZramCompression(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("zramCompression", on).apply()
++    }
++
++
++    fun gameStorage(context: Context): String = prefs(context).getString("gameStorage", "") ?: ""
++
++    const val GAME_STORAGE_OFF = "off"
++
++    fun gameStorageLabel(context: Context): String = prefs(context).getString("gameStorageLabel", "SD Card") ?: "SD Card"
++
++    fun setGameStorage(context: Context, path: String, label: String) {
++        prefs(context).edit().putString("gameStorage", path).putString("gameStorageLabel", label).apply()
++    }
++}
+diff --git a/app/src/main/java/com/droiddeck/launcher/wayland/CompositorHost.kt b/app/src/main/java/com/droiddeck/launcher/wayland/CompositorHost.kt
+index 9df4d4df..d936d9e6 100644
+--- a/app/src/main/java/com/droiddeck/launcher/wayland/CompositorHost.kt
++++ b/app/src/main/java/com/droiddeck/launcher/wayland/CompositorHost.kt
+@@ -1,7 +1,11 @@
+ package com.droiddeck.launcher.wayland
+ 
++import android.os.Handler
++import android.os.HandlerThread
++import android.os.Process
+ import android.view.Choreographer
+ import android.view.Surface
++import com.droiddeck.launcher.session.SessionPrefs
+ import com.droiddeck.launcher.session.SessionState
+ 
+ object CompositorHost {
+@@ -9,8 +13,22 @@ object CompositorHost {
+     private var started = false
+     private var vsyncRunning = false
+ 
+-    private val vsync = object : Choreographer.FrameCallback {
++    @Volatile
++    private var ownVsyncThread = true
++
++    // The screen tick gets its own thread so a busy main thread cannot delay the compositor's frames.
++    private val vsyncThread: HandlerThread by lazy {
++        HandlerThread("droiddeck-vsync", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
++    }
++    private val vsyncHandler: Handler by lazy { Handler(vsyncThread.looper) }
++
++    @Volatile
++    private var vsyncGeneration = 0
++
++    // Each resume gets a new callback; one left queued from an earlier resume, on either thread, stops itself.
++    private fun vsyncCallback(generation: Int) = object : Choreographer.FrameCallback {
+         override fun doFrame(frameTimeNanos: Long) {
++            if (generation != vsyncGeneration) return
+             WaylandCompositor.nativeVsync(frameTimeNanos)
+             if (vsyncRunning) Choreographer.getInstance().postFrameCallback(this)
+         }
+@@ -18,6 +36,7 @@ object CompositorHost {
+ 
+     @Synchronized
+     fun startOrAttach(
++        context: android.content.Context,
+         surface: Surface,
+         xdgRuntimeDir: String,
+         driverPath: String?,
+@@ -28,6 +47,8 @@ object CompositorHost {
+         refreshHz: Float,
+         fpsLimit: Int,
+     ): Boolean {
++        ownVsyncThread = SessionPrefs.vsyncThread(context)
++        WaylandCompositor.nativeSetRenderOnCommit(SessionPrefs.renderOnCommit(context))
+         pace(refreshHz, fpsLimit)
+         if (!SessionState.running) WaylandCompositor.nativeSetOutputSize(outputWidth, outputHeight)
+         if (started) {
+@@ -82,8 +103,14 @@ object CompositorHost {
+ 
+     private fun resumeVsync() {
+         if (vsyncRunning) return
++        val callback = vsyncCallback(++vsyncGeneration)
+         vsyncRunning = true
+-        Choreographer.getInstance().postFrameCallback(vsync)
++        WaylandCompositor.nativeLog("screen", if (ownVsyncThread) "screen tick runs on its own display-priority thread" else "screen tick runs on the main thread")
++        if (!ownVsyncThread) {
++            Choreographer.getInstance().postFrameCallback(callback)
++            return
++        }
++        vsyncHandler.post { Choreographer.getInstance().postFrameCallback(callback) }
+     }
+ 
+     private fun pauseVsync() {
+diff --git a/app/src/main/java/com/droiddeck/launcher/wayland/WaylandCompositor.java b/app/src/main/java/com/droiddeck/launcher/wayland/WaylandCompositor.java
+index 97cfcf3c..28827de8 100644
+--- a/app/src/main/java/com/droiddeck/launcher/wayland/WaylandCompositor.java
++++ b/app/src/main/java/com/droiddeck/launcher/wayland/WaylandCompositor.java
+@@ -273,6 +273,8 @@ public final class WaylandCompositor {
+ 
+     public static native void nativeSetFpsLimit(int fps);
+ 
++    public static native void nativeSetRenderOnCommit(boolean on);
++
+     public static native void nativeSetGpuTurbo(boolean on);
+ 
+     public static native int nativeRaisePriority(int tid, int nice);
+diff --git a/tools/build_local.sh b/tools/build_local.sh
+index c56395c2..78fb5458 100644
+--- a/tools/build_local.sh
++++ b/tools/build_local.sh
+@@ -200,7 +200,7 @@ if [[ -f "${repo_root}/tools/droiddeck-esync/release.env" ]]; then
+     test -f "${sync_assets}/index.json"
+     test -f "${sync_assets}/index.json.sig"
+     sync_index=$(mktemp)
+-    gh release download "${SYNC_BUNDLE_TAG}" -R "${SYNC_BUNDLE_REPO}" -p index.json -O "${sync_index}" --clobber
++    curl -fsSL --retry 3 -o "${sync_index}" "https://github.com/${SYNC_BUNDLE_REPO}/releases/download/${SYNC_BUNDLE_TAG}/index.json"
+     revoked=$(python3 -c 'import json, sys; print(" ".join(p["id"] for p in json.load(open(sys.argv[1]))["packs"] if p.get("revoked") is True))' "${sync_index}")
+     for id in ${revoked}; do
+         if [[ -e "${sync_assets}/packs/${id}.tzst" ]]; then
+diff --git a/tools/comet/build-local.sh b/tools/comet/build-local.sh
+index fe5d4013..e6c7427b 100644
+--- a/tools/comet/build-local.sh
++++ b/tools/comet/build-local.sh
+@@ -8,6 +8,7 @@ docker run --rm --platform linux/amd64 -v "$repo:/src" \
+     set -euo pipefail
+     apt-get update -qq
+     apt-get install -y -qq curl git unzip ca-certificates pkg-config >/dev/null
++    git config --global --add safe.directory "*"
+     export PATH=/rust/cargo/bin:$PATH
+     if ! command -v cargo >/dev/null; then
+       curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.90.0
+diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
+index 83423d36..61ed128f 100644
+--- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
++++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
+@@ -193,7 +193,7 @@ if [ "${BL_VKBRIDGE:-0}" = 1 ]; then
+     # lines in /root/.vkbridge-env, written with adb run-as; ignored when absent.
+     if [ -r /root/.vkbridge-env ]; then
+       while IFS='=' read -r _k _v; do
+-        case "$_k" in VKBRIDGE_*|BL_VKBRIDGE_*) export "$_k=$_v" ;; esac
++        case "$_k" in VKBRIDGE_*|BL_VKBRIDGE_*|BL_GAMESCOPE_ARGS) export "$_k=$_v" ;; esac
+       done < /root/.vkbridge-env
+       [ -z "${BL_INSIDE:-}" ] && echo "== vkbridge: development settings from /root/.vkbridge-env: $(cut -d= -f1 /root/.vkbridge-env | tr '\n' ' ')"
+     fi
+diff --git a/tools/msitools/packages.txt b/tools/msitools/packages.txt
+index 69a9dedb..2b786f1f 100644
+--- a/tools/msitools/packages.txt
++++ b/tools/msitools/packages.txt
+@@ -2,4 +2,4 @@
+ 4028f44d83b2956ba2931d32aee8cceecbd6481e2febf86a3b6bfed69ef403d5  https://github.com/Droid-Deck/DroidDeck/releases/download/msitools-0.106-r1/libgsf-1.14.60-1-aarch64.pkg.tar.xz
+ 3d7bd103313cb36d6cb703a5e583363e56ff255f105bcc0727916d195967976d  https://github.com/Droid-Deck/DroidDeck/releases/download/msitools-0.106-r1/gcab-1.6-2-aarch64.pkg.tar.xz
+ 87fe375a22de1519982234ce99f909ae13c06500784baaa1e8d7a0c0be0d14ee  https://github.com/Droid-Deck/DroidDeck/releases/download/msitools-0.106-r1/cabextract-1.11-3-aarch64.pkg.tar.xz
+-e3bc83ac5960a4363f7ce05eb1d50b03d60d627a4a29f9b02c8e0466a5381b1f  http://mirror.archlinuxarm.org/aarch64/extra/7zip-26.04-1-aarch64.pkg.tar.xz
++17569bafbc5bd1a044ca1db164b96cb15857a22a3575f36679de46e693ae285e  http://mirror.archlinuxarm.org/aarch64/extra/7zip-26.05-1-aarch64.pkg.tar.xz
+diff --git a/tools/proot/build.sh b/tools/proot/build.sh
+index 71819055..5ebde70f 100644
+--- a/tools/proot/build.sh
++++ b/tools/proot/build.sh
+@@ -23,13 +23,22 @@ fi
+ WORK=$(mktemp -d)
+ trap 'rm -rf "$WORK"' EXIT
+ fetch() {
+-  curl -fsSL --retry 3 -o "$WORK/$1" "$2"
+-  echo "$3  $WORK/$1" | shasum -a 256 -c -
+-  mkdir -p "$WORK/${1%%.*}"
+-  tar -xzf "$WORK/$1" -C "$WORK/${1%%.*}" --strip-components=1
++  local name=$1 primary=$2 sha=$3 url fetched=0
++  shift 3
++  for url in "$primary" "$@"; do
++    if curl -fsSL --connect-timeout 15 --max-time 90 --retry 3 --retry-max-time 120 -o "$WORK/$name" "$url" &&
++        printf '%s  %s\n' "$sha" "$WORK/$name" | shasum -a 256 -c -; then
++      fetched=1
++      break
++    fi
++  done
++  [[ $fetched == 1 ]] || return 1
++  mkdir -p "$WORK/${name%%.*}"
++  tar -xzf "$WORK/$name" -C "$WORK/${name%%.*}" --strip-components=1
+ }
+ fetch proot.tar.gz "https://github.com/termux/proot/archive/${PROOT_COMMIT}.tar.gz" "$PROOT_SHA256"
+-fetch talloc.tar.gz "https://www.samba.org/ftp/talloc/talloc-${TALLOC_VERSION}.tar.gz" "$TALLOC_SHA256"
++fetch talloc.tar.gz "https://www.samba.org/ftp/talloc/talloc-${TALLOC_VERSION}.tar.gz" "$TALLOC_SHA256" \
++  "https://distfiles.macports.org/talloc/talloc-${TALLOC_VERSION}.tar.gz"
+ cp "$HERE/statx_mnt_id.h" "$WORK/proot/src/tracee/statx_mnt_id.h"
+ for patch in "$HERE"/patches/*.patch; do
+   patch -d "$WORK/proot" -p1 --forward --quiet < "$patch"
+diff --git a/tools/proot/fastpath/fastpath.c b/tools/proot/fastpath/fastpath.c
+index 22bc38fe..f3f10c1e 100644
+--- a/tools/proot/fastpath/fastpath.c
++++ b/tools/proot/fastpath/fastpath.c
+@@ -791,20 +791,82 @@ int __fxstat(int ver, int fd, struct stat *st) {
+ }
+ int __fxstat64(int ver, int fd, struct stat64 *st) { return __fxstat(ver, fd, (struct stat *)st); }
+ 
+-int statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *out) {
+-  REAL(statx, int (*)(int, const char *, int, unsigned, struct statx *));
+-  struct res r;
++#ifndef STATX__RESERVED
++#define STATX__RESERVED 0x80000000U
++#endif
++
++static int statx_missing;
++
++static unsigned int dev_major(unsigned long long dev) {
++  return ((dev >> 8) & 0xfff) | ((unsigned int)(dev >> 32) & ~0xfffU);
++}
++static unsigned int dev_minor(unsigned long long dev) {
++  return (dev & 0xff) | ((unsigned int)(dev >> 12) & ~0xffU);
++}
++
++static void fill_statx(struct statx *out, const struct stat *st) {
++  memset(out, 0, sizeof *out);
++  out->stx_mask = STATX_BASIC_STATS;
++  out->stx_blksize = st->st_blksize;
++  out->stx_nlink = st->st_nlink;
++  out->stx_uid = st->st_uid;
++  out->stx_gid = st->st_gid;
++  out->stx_mode = st->st_mode;
++  out->stx_ino = st->st_ino;
++  out->stx_size = st->st_size;
++  out->stx_blocks = st->st_blocks;
++  out->stx_atime.tv_sec = st->st_atim.tv_sec;
++  out->stx_atime.tv_nsec = st->st_atim.tv_nsec;
++  out->stx_ctime.tv_sec = st->st_ctim.tv_sec;
++  out->stx_ctime.tv_nsec = st->st_ctim.tv_nsec;
++  out->stx_mtime.tv_sec = st->st_mtim.tv_sec;
++  out->stx_mtime.tv_nsec = st->st_mtim.tv_nsec;
++  out->stx_rdev_major = dev_major(st->st_rdev);
++  out->stx_rdev_minor = dev_minor(st->st_rdev);
++  out->stx_dev_major = dev_major(st->st_dev);
++  out->stx_dev_minor = dev_minor(st->st_dev);
++}
++
++/* Emulate statx on older kernels < 4.11 */
++static long statx_call(int dirfd, const char *path, int flags, unsigned mask, struct statx *out) {
++  struct stat st;
+   long rs;
+-  if ((flags & AT_EMPTY_PATH) && !path[0] && fp_ready()) {
+-    hits++;
+-    return ret(sc(SYS_statx, dirfd, (long)"", flags, mask, (long)out));
++  if ((flags & ~(AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE)) ||
++      (flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE)
++    return -EINVAL;
++  if (!statx_missing) {
++    rs = sc(SYS_statx, dirfd, (long)path, flags, mask, (long)out);
++    if (rs != -ENOSYS) return rs;
++    statx_missing = 1;
+   }
++  if (flags & AT_STATX_SYNC_TYPE) return -ENOSYS;
++  rs = sc(SYS_newfstatat, dirfd, (long)path, (long)&st,
++          flags & (AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT), 0);
++  if (rs < 0) return rs;
++  fill_statx(out, &st);
++  return 0;
++}
++
++static long fp_statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *out) {
++  struct res r;
++  long rs;
++  if (mask & STATX__RESERVED) return -EINVAL;
++  if (!out) return -EFAULT;
++  if (!path) return flags & AT_EMPTY_PATH ? FP_SLOW : -EFAULT;
++  if ((flags & AT_EMPTY_PATH) && !path[0] && fp_ready())
++    return statx_call(dirfd, "", flags, mask, out);
+   rs = (flags & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT | AT_STATX_SYNC_TYPE)) ? FP_SLOW
+        : resolve(dirfd, path, (flags & AT_SYMLINK_NOFOLLOW ? 0 : 1) | MAY_BE_UNSEEN, &r);
+   if (rs == 1) rs = -ENOENT;
+   if (rs == 0 || rs == UNSEEN)
+-    rs = sc(SYS_statx, AT_FDCWD, (long)r.host, flags | (rs == 0 && !r.magic ? AT_SYMLINK_NOFOLLOW : 0), mask, (long)out);
+-  ANSWER(rs, dirfd, path, real_statx(dirfd, path, flags, mask, out));
++    rs = statx_call(AT_FDCWD, r.host, flags | (rs == 0 && !r.magic ? AT_SYMLINK_NOFOLLOW : 0), mask, out);
++  return rs;
++}
++
++int statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *out) {
++  REAL(statx, int (*)(int, const char *, int, unsigned, struct statx *));
++  ANSWER(fp_statx(dirfd, path, flags, mask, out), dirfd, path,
++         real_statx ? real_statx(dirfd, path, flags, mask, out) : ret(sc(SYS_statx, dirfd, (long)path, flags, mask, (long)out)));
+ }
+ 
+ 
+@@ -812,8 +874,7 @@ static int effective_is_real(void) {
+   return !getauxval(AT_SECURE) && getuid() == geteuid() && getgid() == getegid();
+ }
+ 
+-static int access_common(int dirfd, const char *path, int mode, int flags) {
+-  REAL(faccessat, int (*)(int, const char *, int, int));
++static long fp_access(int dirfd, const char *path, int mode, int flags) {
+   struct res r;
+   if ((flags & AT_EACCESS) && effective_is_real()) flags &= ~AT_EACCESS;
+   long rs = (flags & ~AT_SYMLINK_NOFOLLOW) == 0
+@@ -821,6 +882,12 @@ static int access_common(int dirfd, const char *path, int mode, int flags) {
+   if (rs == 1) rs = -ENOENT;
+   if (rs == 0 && S_ISLNK(r.st.st_mode)) rs = FP_SLOW;
+   if (rs == 0 || rs == UNSEEN) rs = sc(SYS_faccessat, AT_FDCWD, (long)r.host, mode, 0, 0);
++  return rs;
++}
++
++static int access_common(int dirfd, const char *path, int mode, int flags) {
++  REAL(faccessat, int (*)(int, const char *, int, int));
++  long rs = fp_access(dirfd, path, mode, flags);
+   if (rs != FP_SLOW) { hits++; return ret(rs); }
+   missed(__func__, dirfd, path);
+   if (flags == 0) return (int)syscall(SYS_faccessat, dirfd, path, mode);
+@@ -848,34 +915,36 @@ static long link_text(const struct res *r, char *text, size_t size, int *changed
+   return (long)strlen(text);
+ }
+ 
+-static ssize_t readlink_common(int dirfd, const char *path, char *buf, size_t size) {
+-  REAL(readlinkat, ssize_t (*)(int, const char *, char *, size_t));
++static long fp_readlink(int dirfd, const char *path, char *buf, size_t size, size_t *written) {
+   struct res r;
+   char text[PATH_MAX];
+   int changed;
+   long rs = size ? resolve(dirfd, path, 0, &r) : FP_SLOW;
+   if (rs == 1) rs = -ENOENT;
+   if (rs == 0) rs = link_text(&r, text, size, &changed);
+-  if (rs == FP_SLOW) {
+-    missed(__func__, dirfd, path);
+-    return real_readlinkat(dirfd, path, buf, size);
+-  }
+-  hits++;
+-  if (rs < 0) return ret(rs);
++  if (rs < 0) return rs;
+   size_t n = rs;
+   if (!changed) {
+     n = n < size ? n : size;
+     memcpy(buf, text, n);
++    if (written) *written = n;
+     return n;
+   }
+   size_t max = size < PATH_MAX ? size : PATH_MAX;
+   if (n + 1 < max) {
+     memcpy(buf, text, n + 1);
++    if (written) *written = n + 1;
+     return n;
+   }
+   memcpy(buf, text, max);
++  if (written) *written = max;
+   return max;
+ }
++
++static ssize_t readlink_common(int dirfd, const char *path, char *buf, size_t size) {
++  REAL(readlinkat, ssize_t (*)(int, const char *, char *, size_t));
++  ANSWER(fp_readlink(dirfd, path, buf, size, NULL), dirfd, path, real_readlinkat(dirfd, path, buf, size));
++}
+ ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t size) { return readlink_common(dirfd, path, buf, size); }
+ ssize_t readlink(const char *path, char *buf, size_t size) { return readlink_common(AT_FDCWD, path, buf, size); }
+ 
+@@ -937,12 +1006,15 @@ char *__getcwd_chk(char *buf, size_t size, size_t room) {
+ }
+ 
+ 
+-int mkdirat(int dirfd, const char *path, mode_t mode) {
+-  REAL(mkdirat, int (*)(int, const char *, mode_t));
++static long fp_mkdir(int dirfd, const char *path, mode_t mode) {
+   struct res r;
+   long rs = resolve(dirfd, path, MAY_BE_UNSEEN, &r);
+   if (rs == 0 || rs == 1 || rs == UNSEEN) rs = sc(SYS_mkdirat, AT_FDCWD, (long)r.host, mode, 0, 0);
+-  ANSWER(rs, dirfd, path, real_mkdirat(dirfd, path, mode));
++  return rs;
++}
++int mkdirat(int dirfd, const char *path, mode_t mode) {
++  REAL(mkdirat, int (*)(int, const char *, mode_t));
++  ANSWER(fp_mkdir(dirfd, path, mode), dirfd, path, real_mkdirat(dirfd, path, mode));
+ }
+ int mkdir(const char *path, mode_t mode) { return mkdirat(AT_FDCWD, path, mode); }
+ 
+@@ -988,8 +1060,7 @@ int unlinkat(int dirfd, const char *path, int flags) { return unlink_common(dirf
+ int unlink(const char *path) { return unlink_common(AT_FDCWD, path, 0); }
+ int rmdir(const char *path) { return unlink_common(AT_FDCWD, path, AT_REMOVEDIR); }
+ 
+-static int rename_common(int olddirfd, const char *old, int newdirfd, const char *new, unsigned flags) {
+-  REAL(renameat2, int (*)(int, const char *, int, const char *, unsigned));
++static long fp_rename(int olddirfd, const char *old, int newdirfd, const char *new, unsigned flags) {
+   struct res from, to;
+   long rs = flags & ~RENAME_NOREPLACE || trailing_slash(old) || trailing_slash(new) ? FP_SLOW : resolve(olddirfd, old, 0, &from);
+   if (rs == 1) rs = -ENOENT;
+@@ -1004,6 +1075,11 @@ static int rename_common(int olddirfd, const char *old, int newdirfd, const char
+       if (rs == 0) forget();
+     }
+   }
++  return rs;
++}
++static int rename_common(int olddirfd, const char *old, int newdirfd, const char *new, unsigned flags) {
++  REAL(renameat2, int (*)(int, const char *, int, const char *, unsigned));
++  long rs = fp_rename(olddirfd, old, newdirfd, new, flags);
+   if (rs != FP_SLOW) { hits++; return ret(rs); }
+   missed(__func__, olddirfd, old);
+   if (!flags) return (int)syscall(SYS_renameat, olddirfd, old, newdirfd, new);
+@@ -1015,30 +1091,35 @@ int renameat2(int olddirfd, const char *old, int newdirfd, const char *new, unsi
+ int renameat(int olddirfd, const char *old, int newdirfd, const char *new) { return rename_common(olddirfd, old, newdirfd, new, 0); }
+ int rename(const char *old, const char *new) { return rename_common(AT_FDCWD, old, AT_FDCWD, new, 0); }
+ 
+-int symlinkat(const char *target, int dirfd, const char *path) {
+-  REAL(symlinkat, int (*)(const char *, int, const char *));
++static long fp_symlink(const char *target, int dirfd, const char *path) {
+   struct res r;
+   long rs = trailing_slash(path) ? FP_SLOW : resolve(dirfd, path, MAY_BE_UNSEEN, &r);
+   if (rs == 0 || rs == 1 || rs == UNSEEN) {
+     rs = sc(SYS_symlinkat, (long)target, AT_FDCWD, (long)r.host, 0, 0);
+     if (rs == 0) forget();
+   }
+-  ANSWER(rs, dirfd, path, real_symlinkat(target, dirfd, path));
++  return rs;
++}
++int symlinkat(const char *target, int dirfd, const char *path) {
++  REAL(symlinkat, int (*)(const char *, int, const char *));
++  ANSWER(fp_symlink(target, dirfd, path), dirfd, path, real_symlinkat(target, dirfd, path));
+ }
+ int symlink(const char *target, const char *path) { return symlinkat(target, AT_FDCWD, path); }
+ 
+-int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
+-  REAL(fchmodat, int (*)(int, const char *, mode_t, int));
++static long fp_chmod(int dirfd, const char *path, mode_t mode, int flags) {
+   struct res r;
+   long rs = flags ? FP_SLOW : resolve(dirfd, path, 1 | MAY_BE_UNSEEN, &r);
+   if (rs == 1) rs = -ENOENT;
+   if (rs == 0 || rs == UNSEEN) rs = sc(SYS_fchmodat, AT_FDCWD, (long)r.host, mode, 0, 0);
+-  ANSWER(rs, dirfd, path, real_fchmodat(dirfd, path, mode, flags));
++  return rs;
++}
++int fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
++  REAL(fchmodat, int (*)(int, const char *, mode_t, int));
++  ANSWER(fp_chmod(dirfd, path, mode, flags), dirfd, path, real_fchmodat(dirfd, path, mode, flags));
+ }
+ int chmod(const char *path, mode_t mode) { return fchmodat(AT_FDCWD, path, mode, 0); }
+ 
+-static int utimens_common(int dirfd, const char *path, const struct timespec times[2], int flags) {
+-  REAL(utimensat, int (*)(int, const char *, const struct timespec[2], int));
++static long fp_utimens(int dirfd, const char *path, const struct timespec times[2], int flags) {
+   struct res r;
+   long rs;
+   if (!path && fp_ready()) {
+@@ -1048,7 +1129,11 @@ static int utimens_common(int dirfd, const char *path, const struct timespec tim
+     if (rs == 1) rs = -ENOENT;
+     if (rs == 0 || rs == UNSEEN) rs = sc(SYS_utimensat, AT_FDCWD, (long)r.host, (long)times, flags, 0);
+   }
+-  ANSWER(rs, dirfd, path, real_utimensat(dirfd, path, times, flags));
++  return rs;
++}
++static int utimens_common(int dirfd, const char *path, const struct timespec times[2], int flags) {
++  REAL(utimensat, int (*)(int, const char *, const struct timespec[2], int));
++  ANSWER(fp_utimens(dirfd, path, times, flags), dirfd, path, real_utimensat(dirfd, path, times, flags));
+ }
+ int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags) {
+   return utimens_common(dirfd, path, times, flags);
+@@ -1075,23 +1160,29 @@ int utime(const char *path, const struct utimbuf *times) {
+   return utimens_common(AT_FDCWD, path, ts, 0);
+ }
+ 
+-int truncate(const char *path, off_t length) {
+-  REAL(truncate, int (*)(const char *, off_t));
++static long fp_truncate(const char *path, off_t length) {
+   struct res r;
+   long rs = resolve(AT_FDCWD, path, 1 | MAY_BE_UNSEEN, &r);
+   if (rs == 1) rs = -ENOENT;
+   if (rs == 0 || rs == UNSEEN) rs = sc(SYS_truncate, (long)r.host, length, 0, 0, 0);
+-  ANSWER(rs, AT_FDCWD, path, real_truncate(path, length));
++  return rs;
++}
++int truncate(const char *path, off_t length) {
++  REAL(truncate, int (*)(const char *, off_t));
++  ANSWER(fp_truncate(path, length), AT_FDCWD, path, real_truncate(path, length));
+ }
+ int truncate64(const char *path, off_t length) __attribute__((alias("truncate")));
+ 
+-static int statfs_common(const char *path, struct statfs *buf, int (*real)(const char *, struct statfs *)) {
++static long fp_statfs(const char *path, struct statfs *buf) {
+   struct res r;
+   long rs = resolve(AT_FDCWD, path, 1, &r);
+   if (rs == 1) rs = -ENOENT;
+   if (rs == 0 && under(r.guest, "/dev/shm", 8)) rs = FP_SLOW;
+   if (rs == 0) rs = sc(SYS_statfs, (long)r.host, (long)buf, 0, 0, 0);
+-  ANSWER(rs, AT_FDCWD, path, real(path, buf));
++  return rs;
++}
++static int statfs_common(const char *path, struct statfs *buf, int (*real)(const char *, struct statfs *)) {
++  ANSWER(fp_statfs(path, buf), AT_FDCWD, path, real(path, buf));
+ }
+ int statfs(const char *path, struct statfs *buf) {
+   REAL(statfs, int (*)(const char *, struct statfs *));
+@@ -1139,12 +1230,16 @@ int statvfs64(const char *path, struct statvfs64 *buf) {
+   return statvfs_common(path, (struct statvfs *)buf, real_statvfs64);
+ }
+ 
+-static ssize_t getxattr_common(const char *path, const char *name, void *value, size_t size, int follow,
+-                               ssize_t (*real)(const char *, const char *, void *, size_t)) {
++static long fp_getxattr(const char *path, const char *name, void *value, size_t size, int follow) {
+   struct res r;
+   long rs = resolve(AT_FDCWD, path, follow | MAY_BE_UNSEEN, &r);
+   if (rs == 1) rs = -ENOENT;
+   if (rs == 0 || rs == UNSEEN) rs = sc(follow ? SYS_getxattr : SYS_lgetxattr, (long)r.host, (long)name, (long)value, size, 0);
++  return rs;
++}
++static ssize_t getxattr_common(const char *path, const char *name, void *value, size_t size, int follow,
++                               ssize_t (*real)(const char *, const char *, void *, size_t)) {
++  long rs = fp_getxattr(path, name, value, size, follow);
+   if (rs != FP_SLOW) { hits++; return rs < 0 ? ret(rs) : rs; }
+   missed(__func__, AT_FDCWD, path);
+   return real(path, name, value, size);
+@@ -1158,12 +1253,16 @@ ssize_t lgetxattr(const char *path, const char *name, void *value, size_t size)
+   return getxattr_common(path, name, value, size, 0, real_lgetxattr);
+ }
+ 
+-static ssize_t listxattr_common(const char *path, char *list, size_t size, int follow,
+-                                ssize_t (*real)(const char *, char *, size_t)) {
++static long fp_listxattr(const char *path, char *list, size_t size, int follow) {
+   struct res r;
+   long rs = resolve(AT_FDCWD, path, follow | MAY_BE_UNSEEN, &r);
+   if (rs == 1) rs = -ENOENT;
+   if (rs == 0 || rs == UNSEEN) rs = sc(follow ? SYS_listxattr : SYS_llistxattr, (long)r.host, (long)list, size, 0, 0);
++  return rs;
++}
++static ssize_t listxattr_common(const char *path, char *list, size_t size, int follow,
++                                ssize_t (*real)(const char *, char *, size_t)) {
++  long rs = fp_listxattr(path, list, size, follow);
+   if (rs != FP_SLOW) { hits++; return rs < 0 ? ret(rs) : rs; }
+   missed(__func__, AT_FDCWD, path);
+   return real(path, list, size);
+@@ -1177,13 +1276,15 @@ ssize_t llistxattr(const char *path, char *list, size_t size) {
+   return listxattr_common(path, list, size, 0, real_llistxattr);
+ }
+ 
+-int inotify_add_watch(int fd, const char *path, uint32_t mask) {
+-  REAL(inotify_add_watch, int (*)(int, const char *, uint32_t));
++static long fp_inotify(int fd, const char *path, uint32_t mask) {
+   struct res r;
+   long rs = resolve(AT_FDCWD, path, (mask & IN_DONT_FOLLOW ? 0 : 1) | MAY_BE_UNSEEN, &r);
+-  if (rs == 1) rs = -ENOENT;
+-  if (rs == 0 || rs == UNSEEN) rs = sc(SYS_inotify_add_watch, fd, (long)r.host, mask, 0, 0);
+-  ANSWER(rs, AT_FDCWD, path, real_inotify_add_watch(fd, path, mask));
++  if (rs == 0 || rs == 1 || rs == UNSEEN) rs = sc(SYS_inotify_add_watch, fd, (long)r.host, mask, 0, 0);
++  return rs;
++}
++int inotify_add_watch(int fd, const char *path, uint32_t mask) {
++  REAL(inotify_add_watch, int (*)(int, const char *, uint32_t));
++  ANSWER(fp_inotify(fd, path, mask), AT_FDCWD, path, real_inotify_add_watch(fd, path, mask));
+ }
+ 
+ 
+@@ -1583,3 +1684,5 @@ struct passwd *getpwuid(uid_t uid) {
+   missed(__func__, AT_FDCWD, "(passwd)");
+   return real_getpwuid(uid);
+ }
++
++#include "svc-patch.h"
+diff --git a/tools/proot/fastpath/svc-cache.h b/tools/proot/fastpath/svc-cache.h
+new file mode 100644
+index 00000000..57c1be4b
+--- /dev/null
++++ b/tools/proot/fastpath/svc-cache.h
+@@ -0,0 +1,90 @@
++struct svc_cached_sites {
++  uint64_t magic;
++  uint32_t api, count;
++  uint64_t offset[256];
++};
++static unsigned svc_cache_hits, svc_cache_misses;
++
++static int svc_segment(const struct dl_phdr_info *info, uint64_t at, size_t length, unsigned flags) {
++  for (int i = 0; i < info->dlpi_phnum; i++) {
++    const ElfW(Phdr) *p = &info->dlpi_phdr[i];
++    if (p->p_type == PT_LOAD && (p->p_flags & flags) == flags &&
++        at >= p->p_vaddr && at - p->p_vaddr <= p->p_memsz &&
++        length <= p->p_memsz - (at - p->p_vaddr)) return i + 1;
++  }
++  return 0;
++}
++
++static int svc_cache_name(const struct dl_phdr_info *info, char *path, size_t size) {
++  const char *enabled = getenv("PROOT_FP_SVC_CACHE");
++  if (enabled && strcmp(enabled, "1")) return 0;
++  for (int i = 0; i < info->dlpi_phnum; i++) {
++    const ElfW(Phdr) *p = &info->dlpi_phdr[i];
++    if (p->p_type != PT_NOTE || !svc_segment(info, p->p_vaddr, p->p_memsz, PF_R)) continue;
++    const unsigned char *note = (const unsigned char *)(info->dlpi_addr + p->p_vaddr);
++    for (size_t at = 0; p->p_memsz - at >= sizeof(ElfW(Nhdr));) {
++      ElfW(Nhdr) h;
++      memcpy(&h, note + at, sizeof h);
++      at += sizeof h;
++      size_t name = ((size_t)h.n_namesz + 3) & ~(size_t)3;
++      size_t desc = ((size_t)h.n_descsz + 3) & ~(size_t)3;
++      if (name > p->p_memsz - at || desc > p->p_memsz - at - name) break;
++      if (h.n_type == NT_GNU_BUILD_ID && h.n_namesz == 4 && !memcmp(note + at, "GNU", 4) &&
++          h.n_descsz && h.n_descsz <= 64) {
++        char id[129];
++        static const char hex[] = "0123456789abcdef";
++        for (size_t j = 0; j < h.n_descsz; j++) {
++          unsigned char b = note[at + name + j];
++          id[2 * j] = hex[b >> 4];
++          id[2 * j + 1] = hex[b & 15];
++        }
++        id[2 * h.n_descsz] = 0;
++        int n = snprintf(path, size, "/tmp/.droiddeck-svc-v2-%d-%s", svc_android_api, id);
++        return n > 0 && (size_t)n < size;
++      }
++      at += name + desc;
++    }
++  }
++  return 0;
++}
++
++static int svc_cache_read(const struct dl_phdr_info *info, const char *path) {
++  long fd = fp_open(AT_FDCWD, path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0);
++  if (fd < 0) return 0;
++  struct stat st;
++  struct svc_cached_sites table;
++  int valid = sc(SYS_fstat, fd, (long)&st, 0, 0, 0) == 0 && S_ISREG(st.st_mode) &&
++              st.st_uid == (uid_t)sc(SYS_getuid, 0, 0, 0, 0, 0) && !(st.st_mode & 0077) &&
++              st.st_size == sizeof table && sc(SYS_read, fd, (long)&table, sizeof table, 0, 0) == sizeof table;
++  sc(SYS_close, fd, 0, 0, 0, 0);
++  if (!valid || table.magic != 0x324356534444ULL || table.api != (unsigned)svc_android_api ||
++      !table.count || table.count > 256 || table.count > 256 - svc_planned) return 0;
++  for (unsigned i = 0; i < table.count; i++) {
++    uint64_t offset = table.offset[i];
++    int segment = svc_segment(info, offset, 4, PF_R | PF_X);
++    if ((offset & 3) || (i && offset <= table.offset[i - 1]) || !segment) return 0;
++    const ElfW(Phdr) *p = &info->dlpi_phdr[segment - 1];
++    const uint32_t *text = (const uint32_t *)(info->dlpi_addr + p->p_vaddr);
++    size_t at = (offset - p->p_vaddr) / 4;
++    if (text[at] != 0xd4000001U || !svc_supported(svc_site_number(text, at))) return 0;
++  }
++  for (unsigned i = 0; i < table.count; i++)
++    svc_plan[svc_planned++].site = (uint32_t *)(info->dlpi_addr + table.offset[i]);
++  return 1;
++}
++
++static void svc_cache_write(const struct dl_phdr_info *info, const char *path, size_t first) {
++  if (svc_planned == first || svc_planned == 256) return;
++  struct svc_cached_sites table = {.magic = 0x324356534444ULL, .api = svc_android_api, .count = svc_planned - first};
++  for (unsigned i = 0; i < table.count; i++)
++    table.offset[i] = (uintptr_t)svc_plan[first + i].site - info->dlpi_addr;
++  char temporary[256];
++  int n = snprintf(temporary, sizeof temporary, "%s.part-%d", path, getpid());
++  if (n <= 0 || n >= (int)sizeof temporary) return;
++  long fd = fp_open(AT_FDCWD, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
++  if (fd < 0) return;
++  long written = sc(SYS_write, fd, (long)&table, sizeof table, 0, 0);
++  sc(SYS_close, fd, 0, 0, 0, 0);
++  if (written == sizeof table) fp_rename(AT_FDCWD, temporary, AT_FDCWD, path, 0);
++  fp_unlink(AT_FDCWD, temporary, 0);
++}
+diff --git a/tools/proot/fastpath/svc-dispatch.h b/tools/proot/fastpath/svc-dispatch.h
+new file mode 100644
+index 00000000..b8e87475
+--- /dev/null
++++ b/tools/proot/fastpath/svc-dispatch.h
+@@ -0,0 +1,128 @@
++static int svc_android_api;
++
++static int svc_host_android_api(void) {
++  const char *value = getenv("PROOT_FP_ANDROID_API");
++  if (!value || !*value) return 0;
++  char *end;
++  long api = strtol(value, &end, 10);
++  return !*end && api > 0 && api < 1000 ? (int)api : 0;
++}
++
++static long svc_memory(void *local, long remote, size_t size, int write) {
++  if (!size) return 0;
++  struct iovec here = {local, size}, there = {(void *)remote, size};
++  return sc(write ? SYS_process_vm_writev : SYS_process_vm_readv, getpid(),
++            (long)&here, 1, (long)&there, 1);
++}
++
++static int svc_path(long pointer, char *path) {
++  long n = svc_memory(path, pointer, PATH_MAX, 0);
++  return n > 0 && memchr(path, 0, (size_t)n) != NULL;
++}
++
++static long svc_output(long result, void *value, long out, size_t size) {
++  if (result < 0) return result;
++  return svc_memory(value, out, size, 1) == (long)size ? result : FP_SLOW;
++}
++
++static int svc_supported(int nr) {
++  switch (nr) {
++  case SYS_openat: case SYS_newfstatat: case SYS_statx: case SYS_readlinkat:
++  case SYS_faccessat: case SYS_mkdirat: case SYS_unlinkat: case SYS_renameat:
++  case SYS_renameat2: case SYS_symlinkat: case SYS_fchmodat: case SYS_utimensat:
++  case SYS_truncate: case SYS_statfs: case SYS_getxattr: case SYS_lgetxattr:
++  case SYS_listxattr: case SYS_llistxattr: case SYS_inotify_add_watch: case SYS_getcwd:
++    return 1;
++  case SYS_faccessat2:
++    return svc_android_api > 0;
++  case SYS_clone3:
++    return svc_android_api > 0 && svc_android_api < 35;
++  default: return 0;
++  }
++}
++
++static long svc_blocked(const long *r) {
++  if (!svc_android_api) return FP_SLOW;
++  if (r[8] == SYS_faccessat2 || (r[8] == SYS_clone3 && svc_android_api < 35)) return -ENOSYS;
++  return FP_SLOW;
++}
++
++static long svc_path_call(const long *r) {
++#ifdef FP_SVC_TEST_HOOK
++  FP_SVC_TEST_HOOK(r);
++#endif
++  char path[PATH_MAX], other[PATH_MAX];
++  struct timespec times[2];
++  const struct timespec *when = (const struct timespec *)r[2];
++  int first = 1, second = -1;
++  switch (r[8]) {
++  case SYS_getcwd: {
++    if (own_cwd(path) == FP_SLOW) return FP_SLOW;
++    size_t n = strlen(path) + 1;
++    if ((unsigned long)r[1] < n) return -ERANGE;
++    return svc_output(n, path, r[0], n);
++  }
++  case SYS_truncate: case SYS_statfs: case SYS_getxattr: case SYS_lgetxattr:
++  case SYS_listxattr: case SYS_llistxattr: first = 0; break;
++  case SYS_renameat: case SYS_renameat2: second = 3; break;
++  case SYS_symlinkat: first = 0; second = 2; break;
++  case SYS_utimensat:
++    if (when) {
++      if (svc_memory(times, r[2], sizeof times, 0) != sizeof times) return FP_SLOW;
++      for (int i = 0; i < 2; i++)
++        if (times[i].tv_nsec != UTIME_NOW && times[i].tv_nsec != UTIME_OMIT &&
++            (times[i].tv_nsec < 0 || times[i].tv_nsec >= 1000000000L)) return FP_SLOW;
++      when = times;
++    }
++    if (!r[1]) return fp_utimens((int)r[0], NULL, when, (int)r[3]);
++    break;
++  case SYS_inotify_add_watch: {
++    char link[64], target[64];
++    snprintf(link, sizeof link, "/proc/self/fd/%d", (int)r[0]);
++    long n = sc(SYS_readlinkat, AT_FDCWD, (long)link, (long)target, sizeof target - 1, 0);
++    if (n <= 0) return FP_SLOW;
++    target[n] = 0;
++    if (strcmp(target, "anon_inode:inotify")) return FP_SLOW;
++    break;
++  }
++  default:
++    if (!svc_supported((int)r[8])) return FP_SLOW;
++  }
++  if (!svc_path(r[first], path) || (second >= 0 && !svc_path(r[second], other))) return FP_SLOW;
++  switch (r[8]) {
++  case SYS_openat: return fp_open((int)r[0], path, (int)r[2], (mode_t)r[3]);
++  case SYS_newfstatat: {
++    struct stat st;
++    return svc_output(fp_stat((int)r[0], path, (int)r[3], &st), &st, r[2], sizeof st);
++  }
++  case SYS_statx: {
++    struct statx st;
++    return svc_output(fp_statx((int)r[0], path, (int)r[2], (unsigned)r[3], &st), &st, r[4], sizeof st);
++  }
++  case SYS_readlinkat: {
++    char text[PATH_MAX];
++    size_t written = 0;
++    long result = fp_readlink((int)r[0], path, text, (size_t)r[3], &written);
++    return svc_output(result, text, r[2], written);
++  }
++  case SYS_faccessat: return fp_access((int)r[0], path, (int)r[2], 0);
++  case SYS_mkdirat: return fp_mkdir((int)r[0], path, (mode_t)r[2]);
++  case SYS_unlinkat: return fp_unlink((int)r[0], path, (int)r[2]);
++  case SYS_renameat: case SYS_renameat2:
++    return fp_rename((int)r[0], path, (int)r[2], other, r[8] == SYS_renameat2 ? (unsigned)r[4] : 0);
++  case SYS_symlinkat: return fp_symlink(path, (int)r[1], other);
++  case SYS_fchmodat: return fp_chmod((int)r[0], path, (mode_t)r[2], 0);
++  case SYS_utimensat: return fp_utimens((int)r[0], path, when, (int)r[3]);
++  case SYS_truncate: return fp_truncate(path, (off_t)r[1]);
++  case SYS_statfs: {
++    struct statfs st;
++    return svc_output(fp_statfs(path, &st), &st, r[1], sizeof st);
++  }
++  case SYS_getxattr: case SYS_lgetxattr:
++    return fp_getxattr(path, (const char *)r[1], (void *)r[2], (size_t)r[3], r[8] == SYS_getxattr);
++  case SYS_listxattr: case SYS_llistxattr:
++    return fp_listxattr(path, (char *)r[1], (size_t)r[2], r[8] == SYS_listxattr);
++  case SYS_inotify_add_watch: return fp_inotify((int)r[0], path, (uint32_t)r[2]);
++  default: return FP_SLOW;
++  }
++}
+diff --git a/tools/proot/fastpath/svc-patch.h b/tools/proot/fastpath/svc-patch.h
+new file mode 100644
+index 00000000..300302f5
+--- /dev/null
++++ b/tools/proot/fastpath/svc-patch.h
+@@ -0,0 +1,269 @@
++static inline int svc_number(uint32_t insn) {
++  if ((insn & 0xffe0001fU) == 0xd2800008U ||
++      (insn & 0xffe0001fU) == 0x52800008U)
++    return (insn >> 5) & 0xffff;
++  return -1;
++}
++
++static inline int svc_argument_instruction(uint32_t insn) {
++  if (insn == 0xd503201fU) return 1;
++  if ((insn & 0xffc00000U) == 0x29000000U ||
++      (insn & 0xffc00000U) == 0xa9000000U ||
++      (insn & 0xffc00000U) == 0xb9000000U ||
++      (insn & 0xffc00000U) == 0xf9000000U) return 1;
++  if ((insn & 31) == 8) return 0;
++  return (insn & 0xffe0ffe0U) == 0xaa0003e0U ||
++         (insn & 0xffe0ffe0U) == 0x2a0003e0U ||
++         (insn & 0xfffffc00U) == 0x93407c00U ||
++         (insn & 0x7f800000U) == 0x52800000U ||
++         (insn & 0x7f800000U) == 0x12800000U ||
++         (insn & 0xffc00000U) == 0xb9400000U ||
++         (insn & 0xffc00000U) == 0xf9400000U ||
++         (insn & 0xffc00000U) == 0xb9800000U ||
++         (insn & 0xff000000U) == 0x91000000U ||
++         (insn & 0xff000000U) == 0xd1000000U ||
++         (insn & 0xff000000U) == 0x11000000U ||
++         (insn & 0xff000000U) == 0x51000000U;
++}
++
++static inline int svc_site_number(const uint32_t *text, size_t at) {
++  for (size_t back = 1; back <= 8 && back <= at; back++) {
++    uint32_t insn = text[at - back];
++    int nr = svc_number(insn);
++    if (nr >= 0) return nr;
++    if (!svc_argument_instruction(insn)) break;
++  }
++  return -1;
++}
++
++static inline int svc_branch(uintptr_t from, uintptr_t to, uint32_t *out) {
++  int64_t delta = (int64_t)to - (int64_t)from;
++  if ((delta & 3) || delta < -0x8000000LL || delta >= 0x8000000LL) return 0;
++  *out = 0x14000000U | ((uint32_t)(delta / 4) & 0x03ffffffU);
++  return 1;
++}
++
++#if defined(__aarch64__) && !defined(FP_SVC_ENCODINGS_ONLY)
++#include <asm/hwcap.h>
++#include <link.h>
++#include <sys/uio.h>
++#include <signal.h>
++
++static __thread uintptr_t svc_busy __attribute__((tls_model("initial-exec")));
++static unsigned svc_sites, svc_pages;
++static unsigned long svc_fast, svc_slow;
++static unsigned long long svc_scan_ns, svc_patch_ns;
++
++#include "svc-dispatch.h"
++#include "svc-stack.h"
++
++static long svc_original(const long *r) {
++  register long x0 __asm__("x0") = r[0];
++  register long x1 __asm__("x1") = r[1];
++  register long x2 __asm__("x2") = r[2];
++  register long x3 __asm__("x3") = r[3];
++  register long x4 __asm__("x4") = r[4];
++  register long x5 __asm__("x5") = r[5];
++  register long x8 __asm__("x8") = r[8];
++  __asm__ volatile("svc #0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8) : "memory", "cc");
++  return x0;
++}
++
++__attribute__((used, visibility("hidden")))
++long fp_svc_dispatch(const long *r) {
++  int saved_errno = errno;
++  long result = svc_blocked(r);
++  uintptr_t frame = (uintptr_t)r;
++  if (result == FP_SLOW && (!svc_busy || frame >= svc_busy)) {
++    uintptr_t previous = svc_busy;
++    svc_busy = frame;
++    if (svc_stack_room(frame)) { result = svc_path_call(r); svc_busy = 0; }
++    else svc_busy = previous;
++  }
++  if (result == FP_SLOW) {
++    __atomic_fetch_add(&svc_slow, 1, __ATOMIC_RELAXED);
++    result = svc_original(r);
++  } else __atomic_fetch_add(&svc_fast, 1, __ATOMIC_RELAXED);
++  errno = saved_errno;
++  return result;
++}
++
++void fp_svc_entry(void) __attribute__((visibility("hidden")));
++/* A replaced svc may have live values in every register, including NZCV and SIMD. */
++__asm__(
++  ".text\n.p2align 4\n.hidden fp_svc_entry\n.type fp_svc_entry,%function\nfp_svc_entry:\n"
++  ".cfi_startproc\n.cfi_def_cfa sp, 16\n.cfi_return_column 16\n"
++  "bti j\nsub sp, sp, #800\n.cfi_def_cfa_offset 816\n"
++  "stp x0, x1, [sp, #0]\nstp x2, x3, [sp, #16]\n"
++  "stp x4, x5, [sp, #32]\nstp x6, x7, [sp, #48]\n"
++  "stp x8, x9, [sp, #64]\nstp x10, x11, [sp, #80]\n"
++  "stp x12, x13, [sp, #96]\nstp x14, x15, [sp, #112]\n"
++  "stp x18, x19, [sp, #128]\nstp x20, x21, [sp, #144]\n"
++  "stp x22, x23, [sp, #160]\nstp x24, x25, [sp, #176]\n"
++  "stp x26, x27, [sp, #192]\nstp x28, x29, [sp, #208]\n"
++  "stp x30, x17, [sp, #224]\nmrs x0, nzcv\nstr x0, [sp, #240]\n"
++  "ldr x0, [x17, #8]\nstr x0, [sp, #784]\n"
++  ".cfi_offset 16, -32\n.cfi_offset 19, -680\n.cfi_offset 20, -672\n"
++  ".cfi_offset 21, -664\n.cfi_offset 22, -656\n.cfi_offset 23, -648\n"
++  ".cfi_offset 24, -640\n.cfi_offset 25, -632\n.cfi_offset 26, -624\n"
++  ".cfi_offset 27, -616\n.cfi_offset 28, -608\n.cfi_offset 29, -600\n.cfi_offset 30, -592\n"
++  ".cfi_offset 72, -432\n.cfi_offset 73, -416\n.cfi_offset 74, -400\n.cfi_offset 75, -384\n"
++  ".cfi_offset 76, -368\n.cfi_offset 77, -352\n.cfi_offset 78, -336\n.cfi_offset 79, -320\n"
++  "mrs x0, fpcr\nstr x0, [sp, #768]\nmrs x0, fpsr\nstr x0, [sp, #776]\n"
++  "stp q0, q1, [sp, #256]\nstp q2, q3, [sp, #288]\n"
++  "stp q4, q5, [sp, #320]\nstp q6, q7, [sp, #352]\n"
++  "stp q8, q9, [sp, #384]\nstp q10, q11, [sp, #416]\n"
++  "stp q12, q13, [sp, #448]\nstp q14, q15, [sp, #480]\n"
++  "stp q16, q17, [sp, #512]\nstp q18, q19, [sp, #544]\n"
++  "stp q20, q21, [sp, #576]\nstp q22, q23, [sp, #608]\n"
++  "stp q24, q25, [sp, #640]\nstp q26, q27, [sp, #672]\n"
++  "stp q28, q29, [sp, #704]\nstp q30, q31, [sp, #736]\n"
++  "mov x0, sp\nbl fp_svc_dispatch\nstr x0, [sp]\n"
++  "ldp q0, q1, [sp, #256]\nldp q2, q3, [sp, #288]\n"
++  "ldp q4, q5, [sp, #320]\nldp q6, q7, [sp, #352]\n"
++  "ldp q8, q9, [sp, #384]\nldp q10, q11, [sp, #416]\n"
++  "ldp q12, q13, [sp, #448]\nldp q14, q15, [sp, #480]\n"
++  "ldp q16, q17, [sp, #512]\nldp q18, q19, [sp, #544]\n"
++  "ldp q20, q21, [sp, #576]\nldp q22, q23, [sp, #608]\n"
++  "ldp q24, q25, [sp, #640]\nldp q26, q27, [sp, #672]\n"
++  "ldp q28, q29, [sp, #704]\nldp q30, q31, [sp, #736]\n"
++  "ldr x0, [sp, #768]\nmsr fpcr, x0\nldr x0, [sp, #776]\nmsr fpsr, x0\n"
++  "ldr x0, [sp, #240]\nmsr nzcv, x0\n"
++  "ldp x0, x1, [sp, #0]\nldp x2, x3, [sp, #16]\n"
++  "ldp x4, x5, [sp, #32]\nldp x6, x7, [sp, #48]\n"
++  "ldp x8, x9, [sp, #64]\nldp x10, x11, [sp, #80]\n"
++  "ldp x12, x13, [sp, #96]\nldp x14, x15, [sp, #112]\n"
++  "ldp x18, x19, [sp, #128]\nldp x20, x21, [sp, #144]\n"
++  "ldp x22, x23, [sp, #160]\nldp x24, x25, [sp, #176]\n"
++  "ldp x26, x27, [sp, #192]\nldp x28, x29, [sp, #208]\n"
++  "ldr x30, [sp, #224]\nldr x16, [sp, #232]\n"
++  "add sp, sp, #800\n.cfi_def_cfa_offset 16\nbr x16\n.cfi_endproc\n.size fp_svc_entry, .-fp_svc_entry\n"
++);
++
++static int svc_emit(uint32_t *code, uint32_t *site, uint32_t *branch) {
++  uint32_t back;
++  if (!svc_branch((uintptr_t)site, (uintptr_t)code, branch) ||
++      !svc_branch((uintptr_t)(code + 5), (uintptr_t)(site + 1), &back)) return 0;
++  code[0] = 0xa9bf47f0U; /* stp x16, x17, [sp, #-16]! */
++  code[1] = 0x580000f0U; /* ldr x16, literal at +32 */
++  code[2] = 0x10000051U; /* adr x17, +8 */
++  code[3] = 0xd61f0200U; /* br x16 */
++  code[4] = 0xa8c147f0U; /* ldp x16, x17, [sp], #16 */
++  code[5] = back;
++  uintptr_t entry = (uintptr_t)fp_svc_entry;
++  uintptr_t resume = (uintptr_t)(site + 1);
++  memcpy(code + 6, &resume, sizeof resume);
++  memcpy(code + 8, &entry, sizeof entry);
++  return 1;
++}
++
++struct svc_site { uint32_t *site; uint32_t branch; };
++static struct svc_site svc_plan[256];
++static size_t svc_planned;
++
++#include "svc-cache.h"
++
++static int svc_object(struct dl_phdr_info *info, size_t size, void *unused) {
++  (void)size;
++  (void)unused;
++  const char *name = strrchr(info->dlpi_name, '/');
++  name = name ? name + 1 : info->dlpi_name;
++  if (strcmp(name, "libc.so.6") && strcmp(name, "ld-linux-aarch64.so.1")) return 0;
++  char cache[224];
++  int cached = svc_cache_name(info, cache, sizeof cache);
++  if (cached && svc_cache_read(info, cache)) { svc_cache_hits++; return 0; }
++  if (cached) svc_cache_misses++;
++  size_t first = svc_planned;
++  for (int i = 0; i < info->dlpi_phnum; i++) {
++    const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
++    if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_X)) continue;
++    uint32_t *text = (uint32_t *)(info->dlpi_addr + ph->p_vaddr);
++    for (size_t j = 1; j < ph->p_memsz / 4 && svc_planned < 256; j++) {
++      if (text[j] != 0xd4000001U) continue;
++      int nr = svc_site_number(text, j);
++      if (!svc_supported(nr)) continue;
++      svc_plan[svc_planned++].site = &text[j];
++    }
++  }
++  if (cached) svc_cache_write(info, cache, first);
++  return 0;
++}
++
++static uint32_t *svc_relay_page(uintptr_t site, size_t page) {
++  uintptr_t base = site & ~(uintptr_t)(page - 1);
++  for (uintptr_t delta = page; delta < 0x7ff0000UL; delta += 0x10000UL) {
++    for (int direction = -1; direction <= 1; direction += 2) {
++      uintptr_t at = direction < 0 ? base - delta : base + delta;
++      if (at < page) continue;
++      void *p = mmap((void *)at, page, PROT_READ | PROT_WRITE,
++                     MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
++      if (p == (void *)at) return p;
++      if (p != MAP_FAILED) munmap(p, page);
++    }
++  }
++  return NULL;
++}
++
++#include "svc-publish.h"
++
++static int svc_single_thread(void) {
++  struct entry { uint64_t ino; int64_t off; unsigned short len; unsigned char type; char name[]; };
++  char buf[4096] __attribute__((aligned(8)));
++  long fd = sc(SYS_openat, AT_FDCWD, (long)"/proc/self/task", O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0, 0);
++  if (fd < 0) return 0;
++  int count = 0;
++  long n;
++  while ((n = sc(SYS_getdents64, fd, (long)buf, sizeof buf, 0, 0)) > 0) {
++    for (long at = 0; at < n;) {
++      const struct entry *e = (const struct entry *)(buf + at);
++      if (n - at < (long)offsetof(struct entry, name) + 1 ||
++          e->len < offsetof(struct entry, name) + 1 || e->len > n - at) { count = -1; goto done; }
++      if (e->name[0] >= '0' && e->name[0] <= '9' && ++count > 1) goto done;
++      at += e->len;
++    }
++  }
++  if (n < 0) count = -1;
++done:
++  sc(SYS_close, fd, 0, 0, 0, 0);
++  return count == 1;
++}
++
++static void svc_stats(void) {
++  char line[256];
++  int n = snprintf(line, sizeof line, "fastpath-svc[%d]: %u sites, %u relay pages, %lu fast, %lu to proot; scan %llu us, patch %llu us, android %d, cache %u hit %u miss\n",
++                   getpid(), svc_sites, svc_pages, svc_fast, svc_slow, svc_scan_ns / 1000, svc_patch_ns / 1000, svc_android_api, svc_cache_hits, svc_cache_misses);
++  if (n > 0 && write(2, line, n < (int)sizeof line ? n : (int)sizeof line - 1) < 0) {}
++}
++
++static unsigned long long svc_clock(void) {
++  struct timespec t;
++  if (sc(SYS_clock_gettime, CLOCK_MONOTONIC, (long)&t, 0, 0, 0) < 0) return 0;
++  return (unsigned long long)t.tv_sec * 1000000000ULL + t.tv_nsec;
++}
++
++static void svc_child(void) { svc_busy = 0; }
++
++__attribute__((constructor)) static void svc_patch_init(void) {
++  const char *enabled = getenv("PROOT_FP_PATCH_SVC");
++  if ((enabled && strcmp(enabled, "1")) || !fp_ready()) return;
++  if (getauxval(AT_HWCAP) & HWCAP_SVE) return;
++#ifdef HWCAP2_SME
++  if (getauxval(AT_HWCAP2) & HWCAP2_SME) return;
++#endif
++  if (!svc_single_thread()) return;
++  if (pthread_atfork(NULL, NULL, svc_child)) return;
++  svc_android_api = svc_host_android_api();
++  size_t page = (size_t)sysconf(_SC_PAGESIZE);
++  if (page < 4096 || (page & (page - 1))) return;
++  int mem = (int)sc(SYS_openat, AT_FDCWD, (long)"/proc/self/mem", O_RDWR | O_CLOEXEC, 0, 0);
++  if (mem < 0) return;
++  unsigned long long start = svc_clock();
++  dl_iterate_phdr(svc_object, NULL);
++  svc_scan_ns = svc_clock() - start;
++  start = svc_clock();
++  svc_publish(mem, page);
++  sc(SYS_close, mem, 0, 0, 0, 0);
++  svc_patch_ns = svc_clock() - start;
++  if (getenv("PROOT_FP_STATS")) atexit(svc_stats);
++}
++#endif
+diff --git a/tools/proot/fastpath/svc-publish.h b/tools/proot/fastpath/svc-publish.h
+new file mode 100644
+index 00000000..002e06c5
+--- /dev/null
++++ b/tools/proot/fastpath/svc-publish.h
+@@ -0,0 +1,28 @@
++static void svc_publish(int mem, size_t page) {
++  for (size_t first = 0; first < svc_planned;) {
++    uint32_t *relay = svc_relay_page((uintptr_t)svc_plan[first].site, page);
++    if (!relay) { first++; continue; }
++    size_t end = first;
++    for (; end < svc_planned && (end - first + 1) * 40 <= page; end++) {
++      uint32_t *code = relay + (end - first) * 10;
++      if (!svc_emit(code, svc_plan[end].site, &svc_plan[end].branch)) break;
++    }
++    __builtin___clear_cache((char *)relay, (char *)relay + page);
++    if (end == first || mprotect(relay, page, PROT_READ | PROT_EXEC)) {
++      munmap(relay, page);
++      first++;
++      continue;
++    }
++    unsigned patched = 0;
++    for (size_t i = first; i < end; i++) {
++      struct svc_site *s = &svc_plan[i];
++      long written = sc(SYS_pwrite64, mem, (long)&s->branch, sizeof s->branch, (long)s->site, 0);
++      if (written != sizeof s->branch) continue;
++      __builtin___clear_cache((char *)s->site, (char *)(s->site + 1));
++      patched++;
++    }
++    if (patched) { svc_sites += patched; svc_pages++; }
++    else munmap(relay, page);
++    first = end;
++  }
++}
+diff --git a/tools/proot/fastpath/svc-stack.h b/tools/proot/fastpath/svc-stack.h
+new file mode 100644
+index 00000000..d3a4ff52
+--- /dev/null
++++ b/tools/proot/fastpath/svc-stack.h
+@@ -0,0 +1,83 @@
++#include <sys/resource.h>
++#include <string.h>
++
++static __thread uintptr_t svc_stack_low __attribute__((tls_model("initial-exec")));
++static __thread uintptr_t svc_stack_high __attribute__((tls_model("initial-exec")));
++static __thread uintptr_t svc_stack_gap __attribute__((tls_model("initial-exec")));
++static __thread int svc_stack_main __attribute__((tls_model("initial-exec")));
++
++static int svc_hex(const char **text, uintptr_t *value) {
++  const char *p = *text;
++  uintptr_t n = 0;
++  int digits = 0;
++  for (;; p++) {
++    unsigned c = (unsigned char)*p;
++    unsigned d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : 16;
++    if (d == 16) break;
++    if (++digits > (int)(2 * sizeof n)) return 0;
++    n = (n << 4) | d;
++  }
++  *text = p;
++  *value = n;
++  return digits > 0;
++}
++
++static int svc_stack_line(const char *line, uintptr_t sp, uintptr_t *low, uintptr_t *high) {
++  uintptr_t a, b;
++  if (!svc_hex(&line, &a) || *line++ != '-' || !svc_hex(&line, &b) ||
++      *line++ != ' ' || line[0] != 'r' || line[1] != 'w' || a >= b || sp < a || sp >= b) return 0;
++  *low = a;
++  *high = b;
++  return 1;
++}
++
++static __attribute__((noinline)) int svc_stack_find(uintptr_t sp) {
++  char chunk[512], line[96];
++  size_t at = 0;
++  long fd = sc(SYS_openat, AT_FDCWD, (long)"/proc/self/maps", O_RDONLY | O_CLOEXEC, 0, 0);
++  if (fd < 0) return 0;
++  long n;
++  uintptr_t low = 0, high = 0, previous = 0;
++  int found = 0;
++  while (!found && (n = sc(SYS_read, fd, (long)chunk, sizeof chunk, 0, 0)) > 0) {
++    for (long i = 0; i < n; i++) {
++      if (chunk[i] == '\n') {
++        line[at] = 0;
++        found = svc_stack_line(line, sp, &low, &high);
++        if (!found) {
++          const char *p = line;
++          uintptr_t a, b;
++          if (svc_hex(&p, &a) && *p++ == '-' && svc_hex(&p, &b) && b <= sp) previous = b;
++        }
++        at = 0;
++        if (found) break;
++      } else if (at < sizeof line - 1) line[at++] = chunk[i];
++    }
++  }
++  sc(SYS_close, fd, 0, 0, 0, 0);
++  if (found) {
++    svc_stack_low = 0;
++    svc_stack_high = high;
++    svc_stack_main = strstr(line, "[stack]") != NULL;
++    svc_stack_gap = previous < low && low - previous > 16 * 1024 * 1024 ? previous + 16 * 1024 * 1024 : low;
++    svc_stack_low = low;
++  }
++  return found;
++}
++
++static int svc_stack_room(uintptr_t sp) {
++  stack_t alt;
++  if (sc(SYS_sigaltstack, 0, (long)&alt, 0, 0, 0) < 0 || (alt.ss_flags & SS_ONSTACK)) return 0;
++  if (!svc_stack_low || sp < svc_stack_low || sp >= svc_stack_high)
++    if (!svc_stack_find(sp)) return 0;
++  uintptr_t low = svc_stack_low;
++  if (svc_stack_main) {
++    struct rlimit limit;
++    if (sc(SYS_prlimit64, 0, RLIMIT_STACK, 0, (long)&limit, 0) < 0) return 0;
++    uintptr_t grow = limit.rlim_cur >= svc_stack_high ? 0 : svc_stack_high - limit.rlim_cur;
++    if (grow < svc_stack_gap) grow = svc_stack_gap;
++    if (grow < low) low = grow;
++  }
++  /* Path translation nests several PATH_MAX-sized frames. */
++  return sp - low >= 96 * 1024;
++}
