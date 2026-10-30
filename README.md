@@ -53,8 +53,8 @@
 
 ### 三种模式的区别
 
-1. **系统 Mali + MaliBridge**：手机自带驱动，Vulkan 1.1.177。兼容性和帧率最好，D3D11/OpenGL 游戏优先用这个。
-2. **PanVK**：内置的 faux123 v1.1.3，Vulkan 1.3.363，带 `VK_EXT_transform_feedback`、`geometryStreams=1` 和 AHB/dma-buf。适合需要 Vulkan 1.3 或 D3D12 的游戏；帧率通常低于 Mali。
+1. **系统 Mali + MaliBridge**：手机自带驱动，Vulkan 1.1.177。**帧率最高，现有游戏最稳**，日常和 D3D11/OpenGL 游戏优先用这个。
+2. **PanVK**：内置的 faux123 v1.1.3，Vulkan 1.3.363，带 `VK_EXT_transform_feedback`、`geometryStreams=1` 和 AHB/dma-buf。**对新 API / 新特性的兼容性更强**，适合需要 Vulkan 1.3 或 D3D12 的游戏；代价是**帧率通常低于 Mali**。
 3. **PanVK + VKD3D 回退组件**：在 PanVK 上跑 D3D12（VKD3D-Proton）时修复 READBACK 内存类型。只对当前 Proton Experimental (ARM64) 的 64 位路径验证过，其他 Proton 和 32 位未验证。
 
 CEF 设置不是独立模式，它只影响 Steam 界面，和游戏渲染无关。
@@ -76,7 +76,7 @@ CEF 设置不是独立模式，它只影响 Steam 界面，和游戏渲染无关
 - ForestTD 默认 D3D12：一次实测约 45 fps（含 Win-FG 2×；原生约 23 fps），能正常游玩，不代表所有场景；
 - 小小梦魇增强版：能进入、画面正常，帧率低；
 - Steam 界面：GPU 菜单约 60 fps，不闪；
-- 需要帧率时切回系统 Mali；需要 D3D12 / Vulkan 1.3 时用 PanVK。
+- **要性能就切回系统 Mali；要 D3D12 / Vulkan 1.3 等新特性就用 PanVK。**
 
 ## 安装
 
@@ -182,8 +182,8 @@ Only an MT8797 / Retroid Pocket 4 gets this profile; other devices keep the syst
 
 ### The three modes
 
-1. **System Mali + MaliBridge**: the phone's own driver, Vulkan 1.1.177. Best compatibility and frame rate; use it for D3D11 and OpenGL games.
-2. **PanVK**: the bundled faux123 v1.1.3, Vulkan 1.3.363, with `VK_EXT_transform_feedback`, `geometryStreams=1` and AHB/dma-buf. For games that need Vulkan 1.3 or D3D12; the frame rate is usually lower than Mali.
+1. **System Mali + MaliBridge**: the phone's own driver, Vulkan 1.1.177. **Highest frame rate and the most stable choice for existing games**; use it day to day and for D3D11/OpenGL games.
+2. **PanVK**: the bundled faux123 v1.1.3, Vulkan 1.3.363, with `VK_EXT_transform_feedback`, `geometryStreams=1` and AHB/dma-buf. **Stronger compatibility with new APIs and features**, for games that need Vulkan 1.3 or D3D12; the cost is **a lower frame rate than Mali**.
 3. **PanVK + VKD3D fallback**: fixes the READBACK memory type for D3D12 (VKD3D-Proton) on PanVK. Verified only for the 64-bit path of the current Proton Experimental (ARM64); other Protons and the 32-bit path are unverified.
 
 The CEF setting is not a mode: it changes only the Steam UI, not game rendering.
@@ -205,7 +205,7 @@ The component manager can restore Proton's own VKD3D separately: Proton Experime
 - ForestTD's default D3D12 path: about 45 fps in one measured session (with Win-FG 2×; about 23 fps native), playable; not a benchmark of every scene;
 - Little Nightmares Enhanced: starts with normal graphics, low frame rate;
 - Steam UI: GPU menus at about 60 fps, no flicker;
-- Switch back to Mali when frame rate matters; use PanVK for D3D12 / Vulkan 1.3.
+- **Switch back to Mali when performance matters; use PanVK for D3D12 / Vulkan 1.3 and other new features.**
 
 ## Install
 
