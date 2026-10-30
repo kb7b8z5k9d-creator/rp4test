@@ -46,6 +46,9 @@ APK 校验（当前里程碑 v0.1.1-fix51）：`67f25cef6cad02c4274ce73ab76595af
 Windows + WSL2 Ubuntu 24.04 + Docker（交叉编译镜像 `droiddeck-local-cross:24.04-v3`），
 NDK 27.3.13750724、JDK 17。构建脚本和步骤见 `docs/整合方案.md` 与项目内的 `tools/build_local.sh`。
 
+本地改动以补丁形式附在本仓库：`patches/fix51-local-changes.patch`（相对 fix51 基线，24 个文件），
+可用 `git apply` 应用到 `yujikaido/droiddeck-rp4pro` 的 fix51 源码；签名密钥不在仓库里，需自行生成。
+
 ## 上游项目
 
 - [Droid-Deck/DroidDeck](https://github.com/Droid-Deck/DroidDeck)
