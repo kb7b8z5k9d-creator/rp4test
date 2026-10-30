@@ -15,7 +15,7 @@
 
 - 支持导入、切换和直接加载 PanVK，并自动检测 dma-buf 导出失败、使用兼容回退。已在 RP4 Pro 上验证能进入 Steam；ForestTD 使用 Vulkan / Forward Mobile 时可正常进入并游玩，截图中的测试场景约 50 FPS。该数据只代表当时场景。
 - 小小梦魇增强版已在 RP4 Pro / PanVK / Proton Experimental (ARM64) 使用单独的通用 VKD3D 组件通过 D3D12 进入游戏，画面正常，但帧率很低，尚未优化。ForestTD 默认 D3D12 路径在此修复后尚未复测；此前 Vulkan 对照使用启动参数 `%command% --rendering-method mobile --rendering-driver vulkan`。
-- PanVK 驱动和 VKD3D 组件均不包含在 APK 中，需要分别导入。VKD3D 组件是通用内存回退修复，对当前 Proton 的 64 位游戏生效；其他 Proton 版本和 32 位路径尚未验证。
+- PanVK 驱动（faux123 v1.1.3）和 VKD3D 组件已经打进 APK：首次启动自动安装，RP4 Pro 默认使用 PanVK；其他设备保持系统 Mali。VKD3D 组件是通用内存回退修复，对当前 Proton 的 64 位游戏生效；其他 Proton 版本和 32 位路径尚未验证。
 - [DX12 里程碑预发布](../../releases/tag/v0.3.0-dx12-preview) 提供 APK 和 VKD3D 组件；此前 [PanVK 预发布](../../releases/tag/v0.2.0-panvk-preview) 与稳定版 v0.1.1-fix51 仍保留。
 - 源码 `source` / `driver-import` 的本次版本：`df822f1f9a48f2dc54af3ddeb1afe86a626b45af`。
 
@@ -41,19 +41,54 @@
 - Crimsonland 的中文文字有轻微偏移/重影。不是缩放采样、不是 DXVK、不是系统字体替换
   （字体打包在游戏资源里），原因仍未定位。
 
+## 图形模式（默认 PanVK，可一键切回）
+
+安装后自动配置成 RP4 Pro 的默认体验：
+
+- PanVK（Vulkan 1.3.363）加系统 Mali 桥接；
+- Proton Experimental (ARM64) 自动启用 VKD3D 回退组件；
+- Steam 使用 GPU 菜单，并关闭 Chromium 自己的 Vulkan 合成（修 Big Picture 闪烁）。
+
+只有检测到 MT8797 / Retroid Pocket 4 才会自动启用；其他机型保持系统 Mali。
+
+### 三种模式的区别
+
+1. **系统 Mali + MaliBridge**：手机自带驱动，Vulkan 1.1.177。兼容性和帧率最好，D3D11/OpenGL 游戏优先用这个。
+2. **PanVK**：内置的 faux123 v1.1.3，Vulkan 1.3.363，带 `VK_EXT_transform_feedback`、`geometryStreams=1` 和 AHB/dma-buf。适合需要 Vulkan 1.3 或 D3D12 的游戏；帧率通常低于 Mali。
+3. **PanVK + VKD3D 回退组件**：在 PanVK 上跑 D3D12（VKD3D-Proton）时修复 READBACK 内存类型。只对当前 Proton Experimental (ARM64) 的 64 位路径验证过，其他 Proton 和 32 位未验证。
+
+CEF 设置不是独立模式，它只影响 Steam 界面，和游戏渲染无关。
+
+### 怎么切
+
+组件页顶部现在直接有“图形模式”：启用 PanVK / 切回系统 Mali，点完重启会话。也可以从 配置 → 组件 → GPU 驱动 → 分别设置运行时驱动和显示驱动 → 显示驱动 进入同一个开关。
+
+- 点“启用 PanVK” → 重启会话（退出 Steam 再进）；
+- 点“切回系统 Mali” → 重启会话；
+- 如果提示“请先导入 PanVK 驱动”，说明自动配置没跑或驱动被删除，可以从 Release 重新导入 `panvk_faux123_v1.1.3.adpkg.zip`。
+
+组件管理器里可以单独恢复 Proton 自带的 VKD3D：Proton Experimental (ARM64) → VKD3D-Proton → 选择原始版本。
+
+### 预期
+
+- ForestTD 默认 D3D12：一次实测约 45 fps（含 Win-FG 2×；原生约 23 fps），能正常游玩，不代表所有场景；
+- 小小梦魇增强版：能进入、画面正常，帧率低；
+- Steam 界面：GPU 菜单约 60 fps，不闪；
+- 需要帧率时切回系统 Mali；需要 D3D12 / Vulkan 1.3 时用 PanVK。
+
 ## 安装
 
 1. 在 [Releases](../../releases) 下载 APK。
 2. 允许安装未知来源应用，安装即可（包名独立，不会覆盖官方版）。
 3. 首次启动按提示下载 Linux 运行时，然后登录 Steam。
 4. 自签名构建：以后更新要覆盖安装（保持同一签名）。
-5. 使用 DX12 里程碑时，另从 Release 下载 `vkd3d-3.1-readback-fallback.wcp`，在应用的组件管理器中导入并为 Proton Experimental (ARM64) 选择它；管理器会保存原组件用于回退。另行导入并启用 PanVK 驱动。
+5. 安装后默认就是 PanVK 配置：驱动和 VKD3D 组件已内置，首次启动自动安装（Proton Experimental 出现后自动启用）；想切回系统 Mali 或改回来见上面的“图形模式”。
 
-APK 校验（当前里程碑 v0.1.1-fix51）：`8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`
+v0.5.0 安装即用版 APK SHA-256：`b92ac32bf469a59ba1b02709cfb0b815b74d515a71bb3c1f121487ae33b177f1`（内置 PanVK v1.1.3 和 VKD3D 组件）
 
-PanVK 实验 APK SHA-256：`2708b362dd27fd39e3d6a5d24a2eef6f5795e5efb32854923ac14ae660411160`
+v0.3.0 DX12 预览版 APK SHA-256：`c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`；VKD3D 组件 SHA-256：`3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`。
 
-DX12 里程碑 APK SHA-256：`c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`；VKD3D 组件 SHA-256：`3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`。
+稳定版 v0.1.1-fix51 APK SHA-256：`8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`。
 
 ## 构建
 
@@ -101,7 +136,7 @@ official app.
 
 - Imports, switches to and directly loads PanVK, automatically probing for failed dma-buf export and enabling the existing fallback. On RP4 Pro, Steam started and ForestTD ran using Vulkan / Forward Mobile; the captured scene showed about 50 FPS, which is not a general benchmark.
 - Little Nightmares Enhanced reached D3D12 gameplay with normal graphics on RP4 Pro / PanVK / Proton Experimental (ARM64), using the separately installed generic VKD3D component. Frame rate is very low and has not been optimized. ForestTD's default D3D12 path has not been retested with this fix; its earlier Vulkan control used `%command% --rendering-method mobile --rendering-driver vulkan`.
-- Neither the PanVK driver nor the VKD3D component is bundled in the APK; import them separately. The component provides a general memory fallback for 64-bit games using the selected Proton; other Proton versions and the 32-bit path remain unverified.
+- The PanVK driver (faux123 v1.1.3) and the VKD3D component are bundled in the APK: the first start installs them, and an RP4 Pro uses PanVK by default; other devices stay on the system Mali driver. The component provides a general memory fallback for 64-bit games using the selected Proton; other Proton versions and the 32-bit path remain unverified.
 - The [DX12 milestone prerelease](../../releases/tag/v0.3.0-dx12-preview) provides an APK and VKD3D component. The earlier [PanVK prerelease](../../releases/tag/v0.2.0-panvk-preview) and stable v0.1.1-fix51 remain available.
 - Source version on `source` / `driver-import`: `df822f1f9a48f2dc54af3ddeb1afe86a626b45af`.
 
@@ -133,6 +168,41 @@ official app.
 - Crimsonland's Chinese text sits slightly off or ghosts. It is not scaling, not DXVK and not system
   font substitution (the fonts are packed inside the game), and the cause is still unknown.
 
+## Graphics modes (PanVK by default, one-tap switch back)
+
+The first start configures the RP4 Pro default:
+
+- PanVK (Vulkan 1.3.363) plus the system Mali bridge;
+- the VKD3D fallback component selected for Proton Experimental (ARM64);
+- GPU Steam menus, with Chromium's own Vulkan compositing off (the Big Picture flicker fix).
+
+Only an MT8797 / Retroid Pocket 4 gets this profile; other devices keep the system Mali driver.
+
+### The three modes
+
+1. **System Mali + MaliBridge**: the phone's own driver, Vulkan 1.1.177. Best compatibility and frame rate; use it for D3D11 and OpenGL games.
+2. **PanVK**: the bundled faux123 v1.1.3, Vulkan 1.3.363, with `VK_EXT_transform_feedback`, `geometryStreams=1` and AHB/dma-buf. For games that need Vulkan 1.3 or D3D12; the frame rate is usually lower than Mali.
+3. **PanVK + VKD3D fallback**: fixes the READBACK memory type for D3D12 (VKD3D-Proton) on PanVK. Verified only for the 64-bit path of the current Proton Experimental (ARM64); other Protons and the 32-bit path are unverified.
+
+The CEF setting is not a mode: it changes only the Steam UI, not game rendering.
+
+### Switching
+
+The Components page now has the "Graphics mode" switch at the top: enable PanVK or switch back to Mali, then restart the session. The same switch is also under Settings → Components → GPU drivers → Set the runtime and display drivers separately → Display driver.
+
+- "Enable PanVK" → restart the session (leave Steam and start it again);
+- "Switch to Mali" → restart the session;
+- If it says "Import a PanVK driver first", the automatic setup did not run or the driver was removed; import `panvk_faux123_v1.1.3.adpkg.zip` from the Release.
+
+The component manager can restore Proton's own VKD3D separately: Proton Experimental (ARM64) → VKD3D-Proton → choose the original.
+
+### What to expect
+
+- ForestTD's default D3D12 path: about 45 fps in one measured session (with Win-FG 2×; about 23 fps native), playable; not a benchmark of every scene;
+- Little Nightmares Enhanced: starts with normal graphics, low frame rate;
+- Steam UI: GPU menus at about 60 fps, no flicker;
+- Switch back to Mali when frame rate matters; use PanVK for D3D12 / Vulkan 1.3.
+
 ## Install
 
 1. Download the APK from [Releases](../../releases).
@@ -140,13 +210,13 @@ official app.
    official app is not replaced).
 3. On first start, download the Linux runtime as prompted, then sign in to Steam.
 4. Self-signed build: future updates must be installed over this one (same signature).
-5. For the DX12 milestone, also download `vkd3d-3.1-readback-fallback.wcp` from the Release, import it in the component manager and select it for Proton Experimental (ARM64). The manager saves the original component for rollback. Obtain and enable PanVK separately.
+5. The PanVK profile is the default after installing: the driver and the VKD3D component are built in, installed on the first start (the component is selected once Proton Experimental exists). To go back to system Mali, see "Graphics modes" above.
 
-APK checksum (current milestone v0.1.1-fix51): `8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`
+v0.5.0 install-and-play APK SHA-256: `b92ac32bf469a59ba1b02709cfb0b815b74d515a71bb3c1f121487ae33b177f1` (PanVK v1.1.3 and the VKD3D component are built in)
 
-PanVK experimental APK SHA-256: `2708b362dd27fd39e3d6a5d24a2eef6f5795e5efb32854923ac14ae660411160`
+v0.3.0 DX12 preview APK SHA-256: `c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`; VKD3D component SHA-256: `3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`.
 
-DX12 milestone APK SHA-256: `c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`; VKD3D component SHA-256: `3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`.
+Stable v0.1.1-fix51 APK SHA-256: `8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`.
 
 ## Build
 
