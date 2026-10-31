@@ -1,0 +1,758 @@
+diff --git a/README.md b/README.md
+index 1b2073fe..5998bc85 100644
+--- a/README.md
++++ b/README.md
+@@ -3,7 +3,8 @@
+ Retroid Pocket 4 Pro 上 DroidDeck 的源码，用于构建自签名的独立版本。
+ 基线是 [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) 的 `source` 分支
+ （fix51，`4ff63195`），上面叠加了本项目的合成器修复、PanVK 安装即用配置和通用 D3D12 改进。
+-当前发布版是 v0.5.0（内置 PanVK 和 VKD3D）；安装、图形模式切换见发布仓库 README。
++当前版本为 [v0.5.1](https://github.com/kb7b8z5k9d-creator/rp4test/releases/tag/v0.5.1)，本机用户已确认可用。
++**首次使用仍需手动开启 Mali Bridge，并下载、安装 Linux 运行时（支持包）。** 完整步骤见[发布仓库 README](https://github.com/kb7b8z5k9d-creator/rp4test#新手首次安装)。
+ 
+ - 设备：Retroid Pocket 4 Pro（Mali-G77 MC9，Android 13，1334×750）
+ - 图形桥：[ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge) v0.5.4.2（fix51 已含）
+@@ -11,19 +12,26 @@ Retroid Pocket 4 Pro 上 DroidDeck 的源码，用于构建自签名的独立版
+ 
+ ## 本地改动
+ 
+-- **PanVK 安装即用版（默认）**：APK 内置 faux123 PanVK v1.1.3（`assets/panvk/`）和 VKD3D readback 回退组件（`assets/vkd3d/`）。`BuiltinProfile` 仅在 MT8797 / Retroid 设备首次启动时复制驱动，设 `androidDriver` / `gpuDriverMode=manual` / `vkBridge=true` / `steamMenus=gpu`，并在 Proton Experimental 存在且未运行时自动选中 VKD3D。组件页首层“图形模式”可切回系统 Mali；Mali 帧率高、现有游戏最稳，PanVK 对 Vulkan 1.3 / D3D12 等新特性兼容性更强但帧率低。
++首次安装：打开 **配置 → 概览**，把 **“Mali 桥接：关闭”** 切换为 **“Mali 桥接：开启”**，再点击 **“Linux 运行时 → 安装”**，等待下载、解压完成。玩 Steam 不需要另外安装 Linux 桌面。
++
++之后启动 Steam，等待 Proton Experimental (ARM64) 下载及“准备游戏组件”完成，再登录账号。PanVK 与 VKD3D 已内置，不需要另外找 ZIP 或替换游戏 DLL，也不需要为启用 VKD3D 额外重开应用。图形模式可在配置的组件页检查；帧生成默认关闭，需要时自行开启。
++
++APK SHA-256：`597cb6a1d8c65d978c3bf6ce0f0746db0e3b0c50772508ee39b95e71c0938890`。
++
++- **PanVK 默认配置**：APK 内置 faux123 PanVK v1.1.3（`assets/panvk/`）和 VKD3D readback 回退组件（`assets/vkd3d/`）。v0.5.1 在支持的 RP4 Pro 上先安装 Proton Experimental (ARM64)，再核验并安装组件，最后启动 Steam，无需额外重启应用。资源经 SHA-256 校验后原子安装；已有驱动、菜单和组件选择得到保留。Proton 更新或重装后重新核对，玩家主动恢复原版则停止自动应用。
++- **玩家版运行路径**：Release APK 不可调试、不打包 Vulkan smoke 测试程序；启动时不运行 smoke 或 vulkaninfo，不读取旧 `.vkbridge-env` 测试开关，关闭桥接逐秒帧统计写盘。保留带缓存的驱动兼容性检测和正常错误日志。电脑上的开发测试不打入 APK。
+ - **通用 DX12 兼容改进**：按实际选中驱动的能力报告选择 DXVK，避免将系统 Mali 的 Vulkan 1.1 误当成 PanVK 的能力；VKD3D-Proton 回退组件已内置，允许缺少 HOST_CACHED 类型时回退到真实可用的 HOST_VISIBLE 内存。组件源码补丁和打包说明见 [`tools/vkd3d`](tools/vkd3d/README.md)。
+ - **合成器显示层**：窗口与场景容差 ±16 px、源矩形 ±2 px（1151×647 vs 1152×648）、按窗口实际矩形映射、
+   忽略 ≤64×64 的触摸光标窗口。
+ - **zero-copy 默认开启**（不只在 HDR 时）。
+ - **签名与包名**：`com.rp4pro.droiddeck.lab`，`CN=RP4Pro Lab`；密钥不在仓库里。
+-- **构建/工具**：proot fastpath（含 svc 头）、7zip 26.05、comet 容器内 `safe.directory`、
+-  `droiddeck-session` 的 `BL_GAMESCOPE_ARGS` 调试入口。
++- **构建/工具**：proot fastpath（含 svc 头）、7zip 26.05、comet 容器内 `safe.directory`。
+ 
+ ## 构建
+ 
+ Windows + WSL2 Ubuntu 24.04 + Docker（`droiddeck-local-cross:24.04-v3`），NDK 27.3.13750724、JDK 17。
+ 入口 `tools/build_local.sh`；构建脚本在 `tools/` 下。需要自备 Android SDK 与签名密钥。
++玩家 APK 使用 `DROIDDECK_BUILD_VARIANT=release`；开发调试与回归测试在电脑上单独运行。
+ 
+ ## 已知问题
+ 
+@@ -46,8 +54,8 @@ Source for the DroidDeck build on the Retroid Pocket 4 Pro, used to build a self
+ package. The base is the `source` branch of
+ [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) (fix51, `4ff63195`),
+ with this project's compositor fixes, the install-and-play PanVK setup and general D3D12 improvements
+-on top. The current release is v0.5.0 (PanVK and VKD3D bundled); installation and graphics-mode
+-switching are documented in the release repository README.
++on top. The current version is [v0.5.1](https://github.com/kb7b8z5k9d-creator/rp4test/releases/tag/v0.5.1), confirmed usable by the RP4 Pro owner.
++**First-time users still need to enable the Mali bridge and download/install the Linux runtime support package manually.** See the [release repository guide](https://github.com/kb7b8z5k9d-creator/rp4test#first-time-setup).
+ 
+ - Device: Retroid Pocket 4 Pro (Mali-G77 MC9, Android 13, 1334×750)
+ - Graphics bridge: [ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge) v0.5.4.2 (already in fix51)
+@@ -55,7 +63,14 @@ switching are documented in the release repository README.
+ 
+ ## Local changes
+ 
+-- **Install-and-play PanVK build (default):** the APK bundles faux123's PanVK v1.1.3 (`assets/panvk/`) and the VKD3D readback fallback (`assets/vkd3d/`). `BuiltinProfile` copies the driver only on MT8797 / Retroid devices, sets `androidDriver` / `gpuDriverMode=manual` / `vkBridge=true` / `steamMenus=gpu`, and selects the VKD3D component once Proton Experimental exists and is not in use. The Components page has a top-level "Graphics mode" switch back to system Mali; Mali has the higher frame rate and is the most stable for existing games, while PanVK is stronger for Vulkan 1.3 / D3D12 and other new features at a lower frame rate.
++First install: open **Setup → Overview**, change **“Mali bridge: off”** to **“Mali bridge: on”**, then tap **“Install”** beside **“Linux runtime”** and wait for download/extraction. Steam does not require the separate Linux desktop.
++
++Start Steam, wait for Proton Experimental (ARM64) and “Preparing game components”, then sign in. PanVK and VKD3D are bundled, with no separate ZIP or game-local DLL replacement needed, and no additional app restart to activate VKD3D. Check graphics mode on the Components page. Frame generation defaults to off; enable it yourself if desired.
++
++APK SHA-256: `597cb6a1d8c65d978c3bf6ce0f0746db0e3b0c50772508ee39b95e71c0938890`.
++
++- **Default PanVK profile:** the APK bundles faux123's PanVK v1.1.3 (`assets/panvk/`) and the VKD3D readback fallback (`assets/vkd3d/`). On supported RP4 Pro devices, v0.5.1 installs Proton Experimental (ARM64), verifies and prepares its component, then starts Steam without another app restart. Assets are verified with SHA-256 and installed atomically. Existing driver, menu and component choices are preserved; Proton updates and reinstalls trigger a new check, while explicitly restoring the original component opts out.
++- **Player runtime:** release APKs are not debuggable and exclude the Vulkan smoke binary. Startup does not run smoke or vulkaninfo, does not read the legacy `.vkbridge-env` switches, and disables per-second bridge frame-statistics writes. Cached driver compatibility checks and normal error logs remain. Computer-side development tests are not packaged in the APK.
+ - **General D3D12 compatibility improvements:** DXVK selection uses the selected driver's actual capabilities instead of confusing system Mali Vulkan 1.1 with PanVK. The VKD3D-Proton fallback component is bundled and falls back to a real HOST_VISIBLE memory type when HOST_CACHED is unavailable. The source patch and packaging notes are in [`tools/vkd3d`](tools/vkd3d/README.md).
+ - **Compositor display layer**: window/scene tolerance ±16 px, source rectangle ±2 px
+   (1151×647 against 1152×648), mapping onto the window's actual rectangle, and ignoring touch-cursor
+@@ -63,14 +78,14 @@ switching are documented in the release repository README.
+ - **Zero-copy on by default** (not only when HDR is on).
+ - **Signature and package name**: `com.rp4pro.droiddeck.lab`, `CN=RP4Pro Lab`; the key is not in this
+   repository.
+-- **Build/tooling**: proot fast path (including the svc headers), 7zip 26.05, `safe.directory` for
+-  comet inside the container, and the `BL_GAMESCOPE_ARGS` debug switch in `droiddeck-session`.
++- **Build/tooling**: proot fast path (including the svc headers), 7zip 26.05, and `safe.directory` for comet inside the container.
+ 
+ ## Build
+ 
+ Windows + WSL2 Ubuntu 24.04 + Docker (`droiddeck-local-cross:24.04-v3`), NDK 27.3.13750724, JDK 17.
+ The entry point is `tools/build_local.sh`; the build scripts live under `tools/`. Bring your own
+ Android SDK and signing key.
++Set `DROIDDECK_BUILD_VARIANT=release` for a player APK; development tests run separately on the computer.
+ 
+ ## Known issues
+ 
+diff --git a/app/build.gradle b/app/build.gradle
+index b6a123c1..1a26a23c 100644
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -175,8 +175,8 @@ android {
+         applicationId droiddeckApplicationId
+         minSdkVersion 26
+         targetSdkVersion 28
+-        versionCode 14
+-        versionName "0.5.0"
++        versionCode 15
++        versionName "0.5.1"
+         buildConfigField "String", "BUILD_LABEL", "\"${escapedBuildLabel}\""
+         buildConfigField "String", "SOURCE_COMMIT", "\"${sourceCommit}\""
+         buildConfigField "String", "MALIBRIDGE_VERSION", "\"${maliBridgeVersion}\""
+@@ -248,9 +248,7 @@ android {
+         release {
+             minifyEnabled false
+             signingConfig rootProject.file('keystore/lab-release.jks').exists() ? signingConfigs.lab : signingConfigs.testkey
+-            // Mali bridge development fork: debuggable so `adb shell run-as` reaches the session
+-            // logs and VkBridgeNative's development override (-Pdroiddeck.notDebuggable to drop).
+-            debuggable !project.hasProperty('droiddeck.notDebuggable')
++            debuggable false
+         }
+     }
+ 
+@@ -298,7 +296,9 @@ tasks.named('preBuild').configure { dependsOn(stageSessionScripts) }
+ def runtimeAssetsDir = layout.buildDirectory.dir('runtimeAssets')
+ def stageRuntimeAssets = tasks.register('stageRuntimeAssets', Sync) {
+     dependsOn(stageSessionScripts)
+-    from(layout.projectDirectory.dir('src/main/assets')) { exclude 'pulseaudio.tzst' }
++    from(layout.projectDirectory.dir('src/main/assets')) {
++        exclude 'pulseaudio.tzst', 'linuxfs/usr/local/bin/droiddeck-vkbridge-smoke'
++    }
+     from(layout.buildDirectory.dir('prepared-assets'))
+     into(runtimeAssetsDir)
+ }
+diff --git a/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt b/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
+index 3a3ff9b4..5b64844a 100644
+--- a/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
++++ b/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
+@@ -410,7 +410,8 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+                 !com.droiddeck.launcher.runtime.DesktopCatalog.desktopInstalled(this)
+             val needProton = (intent.getStringExtra(SessionService.EXTRA_MODE) ?: SessionService.MODE_STEAM) == SessionService.MODE_STEAM &&
+                 com.droiddeck.launcher.runtime.DesktopCatalog.protonSeedNeeded(this)
+-            if (needRuntime || needDesktop || needProton) installThenStart(needRuntime, needDesktop, needProton)
++            if (needRuntime || needDesktop || needProton || com.droiddeck.launcher.gpu.BuiltinProfile.isTargetDevice())
++                installThenStart(needRuntime, needDesktop, needProton)
+         }
+         hud = PerfHud(this)
+         hud.onPresentingWindowChanged = {
+@@ -1104,14 +1105,15 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+     private fun installThenStart(runtime: Boolean, desktop: Boolean, proton: Boolean = false) {
+         if (SessionState.stopRequested) return
+         installingRuntime = true
+-        SessionState.installing = if (runtime) "runtime" else if (desktop) "desktop" else "proton"
++        SessionState.installing = if (runtime) "runtime" else if (desktop) "desktop" else if (proton) "proton" else "components"
+         SessionEvents.transition(
+             SessionPhase.INSTALLING_RUNTIME,
+             "${SessionState.installing}.installing",
+             mapOf("component" to SessionState.installing),
+         )
+         val first = if (runtime) RUNTIME_LINES else if (desktop) DESKTOP_LINES else PROTON_LINES
+-        loading.say(getString(first.downloading), first.topic, readable = true)
++        if (runtime || desktop || proton) loading.say(getString(first.downloading), first.topic, readable = true)
++        else loading.say(getString(R.string.session_preparing_components), LoadingState.Topic.SESSION, readable = true)
+         loading.percent = -1
+         Thread({
+             var failedComponent: String? = null
+@@ -1131,8 +1133,26 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+                 SessionEvents.transition(SessionPhase.INSTALLING_RUNTIME, "proton.installing", mapOf("component" to "proton"))
+                 val protonProblem = installProton()
+                 if (protonProblem == null) SessionEvents.record("proton.ready")
+-                else SessionEvents.record("proton.skipped", mapOf("reason" to protonProblem))
++                else {
++                    SessionEvents.record("proton.skipped", mapOf("reason" to protonProblem))
++                    if (com.droiddeck.launcher.gpu.BuiltinProfile.isTargetDevice()) {
++                        problem = protonProblem
++                        failedComponent = "proton"
++                    }
++                }
++            }
++            if (problem == null && !SessionState.stopRequested) {
++                uiHandler.post {
++                    loading.percent = -1
++                    loading.say(getString(R.string.session_preparing_components), LoadingState.Topic.SESSION, readable = true)
++                }
++                runCatching { com.droiddeck.launcher.gpu.BuiltinProfile.prepareForSession(this) }
++                    .onFailure {
++                        problem = getString(R.string.session_components_prepare_failed, it.message ?: it.javaClass.simpleName)
++                        failedComponent = "components"
++                    }
+             }
++            val startProblem = problem
+             uiHandler.post {
+                 installingRuntime = false
+                 SessionState.installing = null
+@@ -1143,11 +1163,16 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+                     finish()
+                     return@post
+                 }
+-                if (problem != null) {
+-                    val code = if (failedComponent == "runtime") "RUNTIME_INSTALL_FAILED" else "DESKTOP_INSTALL_FAILED"
+-                    SessionEvents.fail(code, problem)
++                if (startProblem != null) {
++                    val code = when (failedComponent) {
++                        "runtime" -> "RUNTIME_INSTALL_FAILED"
++                        "proton" -> "PROTON_INSTALL_FAILED"
++                        "components" -> "COMPONENT_PREPARE_FAILED"
++                        else -> "DESKTOP_INSTALL_FAILED"
++                    }
++                    SessionEvents.fail(code, startProblem)
+                     collectStartArtifacts("session start failed")
+-                    loading.showEnded(problem)
++                    loading.showEnded(startProblem)
+                     focusEndedScreen()
+                     return@post
+                 }
+diff --git a/app/src/main/java/com/droiddeck/launcher/gpu/BuiltinProfile.kt b/app/src/main/java/com/droiddeck/launcher/gpu/BuiltinProfile.kt
+index 98f43d84..13254981 100644
+--- a/app/src/main/java/com/droiddeck/launcher/gpu/BuiltinProfile.kt
++++ b/app/src/main/java/com/droiddeck/launcher/gpu/BuiltinProfile.kt
+@@ -5,17 +5,15 @@ import android.os.Build
+ import android.util.Log
+ import com.droiddeck.launcher.session.ComponentsManager
+ import com.droiddeck.launcher.session.SessionPrefs
++import com.droiddeck.launcher.core.Hashes
++import com.droiddeck.launcher.runtime.LinuxRuntime
+ import java.io.File
+ import java.io.FileOutputStream
+ 
+ /**
+- * The RP4 Pro build's out-of-the-box profile: the bundled PanVK driver (Vulkan 1.3), the VKD3D
+- * readback fallback, the Mali bridge and the CEF compositing setting. Only applied on an MT8797 /
+- * Retroid Pocket 4; every other device keeps the stock Mali bridge and the system driver.
+- *
+- * The driver is copied out of the APK on the first start; the VKD3D package is put in the component
+- * store and selected for Proton Experimental once that Proton exists. A user's later choice is not
+- * overwritten.
++ * Prepares the RP4 Pro defaults before a session starts. Application startup may warm the asset
++ * copies, but never swaps a running Proton. Session startup waits for preparation after installing
++ * Proton, so a first-time player does not need to restart the application.
+  */
+ object BuiltinProfile {
+     private const val TAG = "BuiltinProfile"
+@@ -24,43 +22,58 @@ object BuiltinProfile {
+     private const val WCP = "vkd3d-3.1-readback-fallback.wcp"
+     private const val PREFS = "session"
+     private const val KEY_PROFILE = "builtinProfileApplied"
+-    private const val KEY_VKD3D = "builtinVkd3dApplied"
++    private val lock = Any()
++    private val verified = HashMap<String, Pair<Long, Long>>()
++    internal const val WCP_HASH = "3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6"
+ 
+     fun ensure(context: Context) {
+         if (!isTargetDevice()) return
+         val app = context.applicationContext
+         Thread({
+-            runCatching { ensureDriver(app) }.onFailure { Log.w(TAG, "built-in PanVK", it) }
+-            runCatching { ensureVkd3d(app) }.onFailure { Log.w(TAG, "built-in VKD3D", it) }
++            runCatching { synchronized(lock) { ensureDriver(app) } }
++                .onFailure { Log.w(TAG, "built-in PanVK preparation will retry before the session", it) }
+         }, "builtin-profile").start()
+     }
+ 
++    /** Blocking; call on the installation/session worker before starting Steam or any game. */
++    fun prepareForSession(context: Context) {
++        if (!isTargetDevice()) return
++        synchronized(lock) {
++            ensureDriver(context)
++            ensureVkd3d(context)
++            removeLegacyDiagnostics(context)
++        }
++    }
++
+     /** MT8797 is the Dimensity 1100 in the Retroid Pocket 4 Pro; the name checks cover its builds. */
+     internal fun isTargetDevice(): Boolean {
+         val soc = if (Build.VERSION.SDK_INT >= 31) Build.SOC_MODEL else ""
+-        val identity = listOf(soc, Build.HARDWARE, Build.BOARD, Build.DEVICE, Build.MODEL)
++        return matchesDevice(listOf(soc, Build.HARDWARE, Build.BOARD, Build.DEVICE, Build.MODEL))
++    }
++
++    internal fun matchesDevice(fields: List<String>): Boolean {
++        val identity = fields
+             .joinToString(" ").lowercase()
+-        return identity.contains("mt8797") || identity.contains("rp4") || identity.contains("retroid")
++        return identity.contains("mt8797") ||
++            Regex("\\brp4\\s*pro\\b|retroid\\s*pocket\\s*4\\s*pro\\b").containsMatchIn(identity)
+     }
+ 
+     private fun ensureDriver(context: Context) {
+         val dir = File(context.filesDir, "graphics_driver/$DRIVER_ID")
+-        val library = File(dir, DRIVER_LIB)
+-        if (!library.isFile || library.length() < 1_000_000L) {
+-            dir.mkdirs()
+-            copyAsset(context, "panvk/$DRIVER_LIB", library)
+-            copyAsset(context, "panvk/meta.json", File(dir, "meta.json"))
+-            Log.i(TAG, "installed bundled PanVK $DRIVER_ID")
+-        }
++        ensureAsset(context, "panvk/$DRIVER_LIB", File(dir, DRIVER_LIB),
++            "e2d222b5ab01a209c3e8bdc76ea7985cf3e0c57a709d030b3b3c5d947f5aaea0")
++        ensureAsset(context, "panvk/meta.json", File(dir, "meta.json"),
++            "2ea4d94b41335a2bee19e9a1328e2aaf72aa84a2f647e7de58d08f8b52adac65")
+ 
+         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+         if (prefs.getBoolean(KEY_PROFILE, false)) return
+-        if (SessionPrefs.androidDriver(context).isEmpty()) {
++        // An explicit empty driver ID means the player selected system Mali.
++        if (!prefs.contains("androidDriver")) {
+             SessionPrefs.setAndroidDriver(context, DRIVER_ID)
+             SessionPrefs.setGpuDriverMode(context, SessionPrefs.GPU_DRIVERS_MANUAL)
+         }
+-        SessionPrefs.setVkBridge(context, true)
+-        SessionPrefs.setSteamMenus(context, "gpu")
++        if (!prefs.contains("vkBridge")) SessionPrefs.setVkBridge(context, true)
++        if (!prefs.contains("steamMenus")) SessionPrefs.setSteamMenus(context, "gpu")
+         prefs.edit().putBoolean(KEY_PROFILE, true).apply()
+         Log.i(TAG, "applied the RP4 Pro default profile")
+     }
+@@ -68,26 +81,46 @@ object BuiltinProfile {
+     private fun ensureVkd3d(context: Context) {
+         val packages = File(context.filesDir, "components/packages").apply { mkdirs() }
+         val wcp = File(packages, WCP)
+-        if (!wcp.isFile || wcp.length() < 100_000L) copyAsset(context, "vkd3d/$WCP", wcp)
++        ensureAsset(context, "vkd3d/$WCP", wcp, WCP_HASH)
+ 
+         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+-        if (prefs.getBoolean(KEY_VKD3D, false)) return
+         val proton = ComponentsManager.protons(context).firstOrNull {
+-            it.name.contains("Experimental", ignoreCase = true) ||
+-                it.dir.name.contains("Experimental", ignoreCase = true)
++            it.dir.name == "Proton Experimental (ARM64)" &&
++                File(it.dir, "files/lib/wine/vkd3d-proton/aarch64-windows").isDirectory
+         } ?: return
+-        // A Proton in use gets its swap at the next start, not queued behind a running game here.
+-        if (ComponentsManager.inUse(context, proton)) return
+-        ComponentsManager.swap(context, proton.id, WCP)
+-        prefs.edit().putBoolean(KEY_VKD3D, true).apply()
+-        Log.i(TAG, "selected bundled VKD3D for ${proton.name} ${proton.version}")
++        ComponentsManager.ensureBundledVkd3d(context, proton.id, WCP, WCP_HASH,
++            legacyApplied = prefs.getBoolean("builtinVkd3dApplied", false))
++    }
++
++    private fun ensureAsset(context: Context, asset: String, dest: File, hash: String) {
++        val stamp = dest.length() to dest.lastModified()
++        if (dest.isFile && verified[dest.absolutePath] == stamp) return
++        if (!dest.isFile || Hashes.sha256(dest) != hash) {
++            dest.parentFile?.mkdirs()
++            val tmp = File(dest.parentFile, dest.name + ".builtin-new")
++            try {
++                context.assets.open(asset).use { input ->
++                    FileOutputStream(tmp).use { output -> input.copyTo(output); output.fd.sync() }
++                }
++                check(Hashes.sha256(tmp) == hash) { "Bundled asset verification failed: $asset" }
++                check(tmp.renameTo(dest)) { "Could not install bundled asset: $asset" }
++                dest.setReadable(true, false)
++            } finally {
++                tmp.delete()
++            }
++            Log.i(TAG, "installed bundled asset $asset")
++        }
++        verified[dest.absolutePath] = dest.length() to dest.lastModified()
+     }
+ 
+-    private fun copyAsset(context: Context, asset: String, dest: File) {
+-        dest.parentFile?.mkdirs()
+-        context.assets.open(asset).use { input ->
+-            FileOutputStream(dest).use { output -> input.copyTo(output) }
++    private fun removeLegacyDiagnostics(context: Context) {
++        val root = LinuxRuntime.rootDir(context)
++        File(root, "root/.vkbridge-env").delete()
++        File(root, "usr/local/bin/droiddeck-vkbridge-smoke").delete()
++        for (base in listOf(File(context.filesDir, "vkbridge-pipelines"), File(context.cacheDir, "vkbridge-pipelines"))) {
++            File(base, "env").delete()
++            base.listFiles()?.filter { it.isDirectory && it.name.startsWith("icd-") }
++                ?.forEach { File(it, "env").delete() }
+         }
+-        dest.setReadable(true, false)
+     }
+ }
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/ComponentsManager.kt b/app/src/main/java/com/droiddeck/launcher/session/ComponentsManager.kt
+index 89981eff..3da24b78 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/ComponentsManager.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/ComponentsManager.kt
+@@ -710,12 +710,53 @@ object ComponentsManager {
+     }
+ 
+ 
+-    /** auto: chosen by DroidDeck for this device (bridgeDxvk), not by the player; replaced or undone when that changes. */
++    /** Prepare the bundled default before Steam starts; explicit component choices always win. */
++    fun ensureBundledVkd3d(context: Context, protonId: String, file: String, packageHash: String,
++                          legacyApplied: Boolean = false): Boolean = synchronized(lock) {
++        val p = proton(context, protonId)
++        val state = loadState(context)
++        val defaults = state.sub("bundledVkd3d").sub(p.id)
++        if (defaults.optBoolean("disabled")) return false
++        // Pending player choices win, too. Never queue a default behind a game.
++        if (state.sub("queued").optJSONObject(p.id)?.has("vkd3d") == true) return false
++        val active = state.sub("active").optJSONObject(p.id)?.optJSONObject("vkd3d")
++        if ((active != null && active.optString("file") != file) ||
++            (active == null && legacyApplied && !defaults.has("protonVersion"))) {
++            defaults.put("disabled", true)
++            saveState(context, state)
++            return false
++        }
++        val expected = active?.optJSONObject("files")
++        val current = active?.optString("protonVersion") == p.version &&
++            expected != null && expected.length() > 0 && expected.keys().asSequence().all { rel ->
++                val dll = File(p.dir, rel)
++                dll.isFile && Hashes.sha256(dll) == expected.getString(rel)
++            }
++        if (current && defaults.optString("packageSha256") == packageHash) {
++            if (defaults.optString("protonVersion") != p.version) {
++                defaults.put("protonVersion", p.version).put("packageSha256", packageHash)
++                saveState(context, state)
++            }
++            return true
++        }
++        check(!inUse(context, p)) { "Close games using ${p.name} before preparing its bundled VKD3D." }
++        val wcp = File(packagesDir(context), safeName(file))
++        check(Hashes.sha256(wcp) == packageHash) { "Bundled VKD3D package verification failed" }
++        val info = packageInfo(context, wcp)
++        check(info.comp == "vkd3d") { "Not a VKD3D package: $file" }
++        applyPackage(context, p, info, wcp, state, auto = true)
++        defaults.put("protonVersion", p.version).put("packageSha256", packageHash)
++        saveState(context, state)
++        true
++    }
++
++    /** auto: chosen by DroidDeck for this device, not by the player. */
+     fun swap(context: Context, protonId: String, file: String, auto: Boolean = false): String = synchronized(lock) {
+         val p = proton(context, protonId)
+         val wcp = File(packagesDir(context), safeName(file))
+         val info = packageInfo(context, wcp)
+         val state = loadState(context)
++        if (!auto && info.comp == "vkd3d") state.sub("bundledVkd3d").sub(p.id).put("disabled", true)
+         if (inUse(context, p)) {
+             state.sub("queued").sub(p.id).put(info.comp, JSONObject().put("kind", "package").put("file", wcp.name).put("label", info.version)
+                 .apply { if (auto) put("auto", true) })
+@@ -744,6 +785,7 @@ object ComponentsManager {
+         val wcp = File(originalsDir(context), "$protonId/${safeName(protonVersion)}/$comp.wcp")
+         check(wcp.isFile) { context.getString(R.string.cmgr_original_missing) }
+         val state = loadState(context)
++        if (comp == "vkd3d") state.sub("bundledVkd3d").sub(p.id).put("disabled", true)
+         if (inUse(context, p)) {
+             state.sub("queued").sub(p.id).put(comp, JSONObject().put("kind", "original").put("protonVersion", protonVersion).put("label", "Original $protonVersion"))
+             saveState(context, state)
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionFiles.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionFiles.kt
+index 711304c9..b2482834 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionFiles.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionFiles.kt
+@@ -120,7 +120,6 @@ object SessionFiles {
+             // The Mali bridge's Linux side (external/MaliBridge): the ICD, its manifest and the self-test.
+             "usr/local/lib/vkbridge/libvulkan_droidbridge.so" to "usr/local/lib/vkbridge/libvulkan_droidbridge.so",
+             "usr/local/share/vkbridge/droidbridge_icd.json" to "usr/local/share/vkbridge/droidbridge_icd.json",
+-            "usr/local/bin/droiddeck-vkbridge-smoke" to "usr/local/bin/droiddeck-vkbridge-smoke",
+             "usr/local/lib/droiddeck/uruntime" to "usr/local/lib/droiddeck/uruntime",
+             "usr/local/share/licenses/uruntime/LICENSE" to "usr/local/share/licenses/uruntime/LICENSE",
+         ) + mangoapp + listOf("comet", "GalaxyCommunication.exe", "update-permissions.exe", "LICENSE", "version").map { "usr/local/lib/droiddeck-comet/$it" to "usr/local/lib/droiddeck-comet/$it" } + msitools.map { it to it } + vr + fexPreloads).filter { (asset, _) ->
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+index 0d15d188..191ac8f2 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+@@ -283,7 +283,8 @@ class SessionService : Service() {
+ 
+     private fun tuDebug(linuxDriverId: String): String? {
+         val override = File(Environment.getExternalStorageDirectory(), TU_DEBUG_SWITCH)
+-            .takeIf { it.isFile }?.let { FileUtils.readString(it)?.trim() }
++            .takeIf { com.droiddeck.launcher.BuildConfig.DEBUG && it.isFile }
++            ?.let { FileUtils.readString(it)?.trim() }
+         if (!override.isNullOrEmpty()) return override
+         if (SessionPrefs.tuSysmem(this)) return "sysmem"
+         if (linuxDriverId.isEmpty()) return null
+@@ -627,6 +628,11 @@ class SessionService : Service() {
+             components.add(it)
+         }
+         guest.add("BL_VKBRIDGE=1")
++        if (com.droiddeck.launcher.gpu.BuiltinProfile.isTargetDevice()) {
++            guest.add("BL_VKBRIDGE_CEF_ANGLE=vulkan")
++            guest.add("BL_VKBRIDGE_CEF_VULKAN=0")
++        }
++        if (!com.droiddeck.launcher.BuildConfig.DEBUG) guest.add("VKBRIDGE_FRAMES=0")
+         // Setup's "Steam menus": older Malis (G57, G68 and their generation) draw Steam's browser UI
+         // black on the GPU, so it is drawn in software there unless the player picks the GPU.
+         val menus = SessionPrefs.steamMenus(this)
+@@ -639,7 +645,7 @@ class SessionService : Service() {
+         guest.add("VKBRIDGE_SOCKET=" + socket.path)
+         guest.add("VKBRIDGE_CLIENT_LOG=" + File(sessionDir, "vkbridge-client.log").path)
+         // Setup's "Safe mode": the client's defaults by mode (the server reads <cache dir>/mode,
+-        // written by VkBridgeComponent); /root/.vkbridge-env can still override it.
++        // written by VkBridgeComponent).
+         guest.add("VKBRIDGE_MODE=" + SessionPrefs.vkBridgeMode(this))
+         // The render node gamescope sees is Mali's device (or the GPU's own DRM render node, on an
+         // Xclipse) standing in (LinuxRuntime.bindGpuNode): the ICD reports its numbers, and the
+diff --git a/app/src/main/res/values-zh-rCN/strings.xml b/app/src/main/res/values-zh-rCN/strings.xml
+index 3e7950d1..1c42c792 100644
+--- a/app/src/main/res/values-zh-rCN/strings.xml
++++ b/app/src/main/res/values-zh-rCN/strings.xml
+@@ -1370,6 +1370,8 @@
+     <string name="session_logs_archive_failed">无法创建会话日志压缩包。</string>
+     <string name="session_logs_share_failed">无法分享会话日志。</string>
+     <string name="session_starting_session">正在启动会话…</string>
++    <string name="session_preparing_components">正在准备游戏组件…</string>
++    <string name="session_components_prepare_failed">游戏组件准备失败：%1$s。如存储空间不足，请释放空间后重试。</string>
+     <string name="session_runtime_downloading">正在下载 Linux 运行时</string>
+     <string name="session_runtime_downloading_mb">正在下载 Linux 运行时 · %1$d / %2$d MB</string>
+     <string name="session_runtime_checking">正在检查 Linux 运行时</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index 5c5637c7..7cdcb428 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1418,6 +1418,8 @@
+     <string name="session_logs_archive_failed">Could not create the session log archive.</string>
+     <string name="session_logs_share_failed">Could not share the session logs.</string>
+     <string name="session_starting_session">Starting the session…</string>
++    <string name="session_preparing_components">Preparing game components…</string>
++    <string name="session_components_prepare_failed">Could not prepare game components: %1$s. Free up storage if needed, then try again.</string>
+     <string name="session_runtime_downloading">downloading the Linux runtime</string>
+     <string name="session_runtime_downloading_mb">downloading the Linux runtime · %1$d of %2$d MB</string>
+     <string name="session_runtime_checking">checking the Linux runtime</string>
+diff --git a/app/src/test/java/com/droiddeck/launcher/gpu/BuiltinProfileTest.kt b/app/src/test/java/com/droiddeck/launcher/gpu/BuiltinProfileTest.kt
+new file mode 100644
+index 00000000..fcb2d26c
+--- /dev/null
++++ b/app/src/test/java/com/droiddeck/launcher/gpu/BuiltinProfileTest.kt
+@@ -0,0 +1,74 @@
++package com.droiddeck.launcher.gpu
++
++import android.content.Context
++import android.os.Build
++import com.droiddeck.launcher.core.Hashes
++import com.droiddeck.launcher.runtime.LinuxRuntime
++import com.droiddeck.launcher.session.ComponentsManager
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.RuntimeEnvironment
++import org.robolectric.annotation.Config
++import org.robolectric.util.ReflectionHelpers
++import java.io.File
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [28], manifest = Config.NONE)
++class BuiltinProfileTest {
++    private lateinit var context: Context
++
++    @Before fun setUp() {
++        context = RuntimeEnvironment.getApplication()
++        ReflectionHelpers.setStaticField(Build::class.java, "HARDWARE", "mt8797")
++        context.getSharedPreferences("session", Context.MODE_PRIVATE).edit().clear().commit()
++        for (dir in listOf("graphics_driver", "components")) File(context.filesDir, dir).deleteRecursively()
++        LinuxRuntime.rootDir(context).deleteRecursively()
++    }
++
++    @Test fun theDefaultIsLimitedToTheSupportedDevice() {
++        assertTrue(BuiltinProfile.matchesDevice(listOf("MT8797")))
++        assertTrue(BuiltinProfile.matchesDevice(listOf("RP4Pro")))
++        assertTrue(BuiltinProfile.matchesDevice(listOf("Retroid Pocket 4 Pro")))
++        assertFalse(BuiltinProfile.matchesDevice(listOf("Retroid Pocket 4")))
++        assertFalse(BuiltinProfile.matchesDevice(listOf("Retroid Pocket 5")))
++        assertFalse(BuiltinProfile.matchesDevice(listOf("Retroid", "unverified device")))
++    }
++
++    @Test fun preparingAssetsPreservesExistingPlayerPreferences() {
++        val prefs = context.getSharedPreferences("session", Context.MODE_PRIVATE)
++        prefs.edit().putString("androidDriver", "").putString("gpuDriverMode", "manual")
++            .putBoolean("vkBridge", false).putString("steamMenus", "software").commit()
++        BuiltinProfile.prepareForSession(context)
++        assertEquals("", prefs.getString("androidDriver", null))
++        assertEquals("manual", prefs.getString("gpuDriverMode", null))
++        assertFalse(prefs.getBoolean("vkBridge", true))
++        assertEquals("software", prefs.getString("steamMenus", null))
++    }
++
++    @Test fun partialCopiesAreRepairedAndALaterInstalledProtonIsPreparedInTheSameApp() {
++        val driver = File(context.filesDir, "graphics_driver/PanVK_faux123_v1.1.3/libvulkan_panfrost.so")
++        driver.parentFile!!.mkdirs()
++        driver.writeBytes(ByteArray(2_000_000))
++        val wcp = File(context.filesDir, "components/packages/vkd3d-3.1-readback-fallback.wcp")
++        wcp.parentFile!!.mkdirs()
++        wcp.writeBytes(ByteArray(150_000))
++        BuiltinProfile.prepareForSession(context)
++        assertEquals("e2d222b5ab01a209c3e8bdc76ea7985cf3e0c57a709d030b3b3c5d947f5aaea0", Hashes.sha256(driver))
++        assertTrue(File(driver.parentFile, "meta.json").isFile)
++        assertEquals(BuiltinProfile.WCP_HASH, Hashes.sha256(wcp))
++
++        val proton = File(LinuxRuntime.rootDir(context), "root/.local/share/Steam/steamapps/common/Proton Experimental (ARM64)")
++        val dll = File(proton, "files/lib/wine/vkd3d-proton/aarch64-windows/d3d12core.dll")
++        dll.parentFile!!.mkdirs()
++        dll.writeText("stock")
++        File(proton, "proton").writeText("#!/bin/sh\n")
++        File(proton, "version").writeText("1 experimental-v1-arm64\n")
++        BuiltinProfile.prepareForSession(context)
++        val component = ComponentsManager.snapshot(context).protons.single().components.getValue("vkd3d")
++        assertEquals(wcp.name, component.activeFile)
++        assertNotEquals("stock", dll.readBytes().take(5).toByteArray().decodeToString())
++    }
++}
+diff --git a/app/src/test/java/com/droiddeck/launcher/session/ComponentsBundledVkd3dTest.kt b/app/src/test/java/com/droiddeck/launcher/session/ComponentsBundledVkd3dTest.kt
+new file mode 100644
+index 00000000..e863431a
+--- /dev/null
++++ b/app/src/test/java/com/droiddeck/launcher/session/ComponentsBundledVkd3dTest.kt
+@@ -0,0 +1,109 @@
++package com.droiddeck.launcher.session
++
++import android.content.Context
++import com.droiddeck.launcher.core.Hashes
++import com.droiddeck.launcher.runtime.LinuxRuntime
++import com.github.luben.zstd.ZstdOutputStream
++import org.apache.commons.compress.archivers.tar.TarArchiveEntry
++import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.RuntimeEnvironment
++import org.robolectric.annotation.Config
++import java.io.File
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [28], manifest = Config.NONE)
++class ComponentsBundledVkd3dTest {
++    private lateinit var context: Context
++    private lateinit var proton: File
++    private lateinit var bundle: File
++    private val relative = "files/lib/wine/vkd3d-proton/aarch64-windows/d3d12core.dll"
++
++    @Before fun setUp() {
++        context = RuntimeEnvironment.getApplication()
++        File(context.filesDir, "components").deleteRecursively()
++        LinuxRuntime.rootDir(context).deleteRecursively()
++        proton = File(LinuxRuntime.rootDir(context), "root/.local/share/Steam/steamapps/common/Proton Experimental (ARM64)")
++        File(proton, relative).apply { parentFile!!.mkdirs(); writeText("original v1") }
++        File(proton, "proton").writeText("#!/bin/sh\n")
++        File(proton, "version").writeText("1 experimental-v1-arm64\n")
++        bundle = packageFile("bundled.wcp", "bundled readback")
++    }
++
++    @Test fun firstPreparationSavesOriginalAndRepairsASameVersionReinstall() {
++        assertTrue(prepare())
++        assertEquals("bundled readback", File(proton, relative).readText())
++        val original = File(context.filesDir, "components/originals/${id()}/experimental-v1-arm64/vkd3d.wcp")
++        assertTrue(original.isFile)
++        val backup = Hashes.sha256(original)
++        assertTrue(prepare())
++        assertEquals(backup, Hashes.sha256(original))
++        File(proton, relative).writeText("original v1")
++        assertTrue(prepare())
++        assertEquals("bundled readback", File(proton, relative).readText())
++        assertEquals(backup, Hashes.sha256(original))
++    }
++
++    @Test fun aProtonUpdateGetsItsOwnBackupAndTheDefaultWithoutRestartingTheApp() {
++        prepare()
++        updateProton()
++        assertTrue(prepare())
++        assertEquals("bundled readback", File(proton, relative).readText())
++        ComponentsManager.restore(context, id(), "vkd3d", "experimental-v2-arm64")
++        assertEquals("original v2", File(proton, relative).readText())
++    }
++
++    @Test fun restoringOriginalOptsOutEvenAcrossProtonUpdates() {
++        prepare()
++        ComponentsManager.restore(context, id(), "vkd3d", "experimental-v1-arm64")
++        assertFalse(prepare())
++        assertEquals("original v1", File(proton, relative).readText())
++        updateProton()
++        assertFalse(prepare())
++        assertEquals("original v2", File(proton, relative).readText())
++    }
++
++    @Test fun anExistingPlayerPackageIsPreserved() {
++        packageFile("player.wcp", "player selected")
++        ComponentsManager.swap(context, id(), "player.wcp")
++        assertFalse(prepare())
++        assertEquals("player selected", File(proton, relative).readText())
++    }
++
++    @Test fun aLegacyRestoredOriginalIsNotOverwrittenDuringMigration() {
++        assertFalse(ComponentsManager.ensureBundledVkd3d(context, id(), bundle.name, Hashes.sha256(bundle), legacyApplied = true))
++        assertEquals("original v1", File(proton, relative).readText())
++    }
++
++    @Test fun aBadPackageCannotModifyTheProton() {
++        assertThrows(IllegalStateException::class.java) {
++            ComponentsManager.ensureBundledVkd3d(context, id(), bundle.name, "0".repeat(64))
++        }
++        assertEquals("original v1", File(proton, relative).readText())
++    }
++
++    private fun prepare() = ComponentsManager.ensureBundledVkd3d(context, id(), bundle.name, Hashes.sha256(bundle))
++    private fun id() = ComponentsManager.protons(context).single().id
++    private fun updateProton() {
++        File(proton, "version").writeText("2 experimental-v2-arm64\n")
++        File(proton, relative).writeText("original v2")
++    }
++
++    private fun packageFile(name: String, contents: String): File {
++        val file = File(context.filesDir, "components/packages/$name")
++        file.parentFile!!.mkdirs()
++        TarArchiveOutputStream(ZstdOutputStream(file.outputStream())).use { tar ->
++            for ((path, text) in mapOf("profile.json" to """{"type":"VKD3D-Linux","versionName":"test"}""", relative to contents)) {
++                val bytes = text.toByteArray()
++                tar.putArchiveEntry(TarArchiveEntry(path).apply { size = bytes.size.toLong() })
++                tar.write(bytes)
++                tar.closeArchiveEntry()
++            }
++        }
++        return file
++    }
++}
+diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
+index 5a367c5d..fa9657a9 100644
+--- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
++++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
+@@ -123,9 +123,6 @@ fi
+ # ANGLE's Vulkan device, no EGL window surface); BL_VKBRIDGE_CEF_VULKAN=0 leaves it off.
+ # BL_VKBRIDGE_WEBHELPER_ARGS replaces the whole layout for experiments.
+ bl_webhelper_layout() {
+-  # RP4 Pro default: ANGLE on Vulkan, Chromium's own Vulkan compositing off (Big Picture flicker).
+-  : "${BL_VKBRIDGE_CEF_ANGLE:=vulkan}"
+-  : "${BL_VKBRIDGE_CEF_VULKAN:=0}"
+   if [ -n "${BL_VKBRIDGE_WEBHELPER_ARGS:-}" ]; then
+     printf '%s\n' "$BL_VKBRIDGE_WEBHELPER_ARGS"
+   elif [ -z "${BL_VKBRIDGE_CEF_ANGLE:-}" ]; then
+@@ -192,27 +189,12 @@ if [ "${BL_VKBRIDGE:-0}" = 1 ]; then
+   if [ -z "$bl_vkb_missing" ]; then
+     export VK_DRIVER_FILES=$bl_vkb_icd VK_ICD_FILENAMES=$bl_vkb_icd
+     export VKBRIDGE_SOCKET VKBRIDGE_CLIENT_LOG
+-    # Development switches (frame dumps, BL_VKBRIDGE_CEF_GPU, ...) without a new APK: KEY=VALUE
+-    # lines in /root/.vkbridge-env, written with adb run-as; ignored when absent.
+-    if [ -r /root/.vkbridge-env ]; then
+-      while IFS='=' read -r _k _v; do
+-        case "$_k" in VKBRIDGE_*|BL_VKBRIDGE_*|BL_GAMESCOPE_ARGS) export "$_k=$_v" ;; esac
+-      done < /root/.vkbridge-env
+-      [ -z "${BL_INSIDE:-}" ] && echo "== vkbridge: development settings from /root/.vkbridge-env: $(cut -d= -f1 /root/.vkbridge-env | tr '\n' ' ')"
+-    fi
+     # vkd3d-proton grants D3D12 feature level 12_0 only with vertex-stage stores, logic op and
+     # sparse residency, which Mali-G720 lacks; most D3D12 games ask for 12_0 and use none of them.
+     # The usual override on such GPUs (Winlator's on Adreno too); a game's own setting wins.
+     export VKD3D_FEATURE_LEVEL=${VKD3D_FEATURE_LEVEL:-12_0}
+     # Turnip's switches mean nothing to the bridge.
+     unset TU_DEBUG
+-    if [ -z "${BL_INSIDE:-}" ]; then
+-      step "vkbridge self-test"
+-      timeout 60 /usr/local/bin/droiddeck-vkbridge-smoke 2>&1 | sed 's/^/== vkbridge: /'
+-      if command -v vulkaninfo >/dev/null 2>&1; then
+-        timeout 30 vulkaninfo --summary 2>&1 | sed -n '/^Devices:/,$p' | head -40 | sed 's/^/== vulkaninfo: /'
+-      fi
+-    fi
+     echo "== vulkan driver: Mali bridge ($bl_vkb_icd, server at $VKBRIDGE_SOCKET)"
+   else
+     echo "== vulkan driver: Mali bridge requested but NOT usable (icd $bl_vkb_icd, socket ${VKBRIDGE_SOCKET:-unset}; missing:$bl_vkb_missing); this GPU will show a black screen"
+diff --git a/tools/release/runtime_inputs.py b/tools/release/runtime_inputs.py
+index 6c7944ce..6b8c9788 100644
+--- a/tools/release/runtime_inputs.py
++++ b/tools/release/runtime_inputs.py
+@@ -47,6 +47,8 @@ def outputs(root):
+         base = root / 'app/src/main/assets' / tree
+         for path in base.rglob('*'):
+             if path.is_file() and not any(part.startswith('.') for part in path.relative_to(base).parts):
++                if tree == 'linuxfs' and path.relative_to(base).as_posix() == 'usr/local/bin/droiddeck-vkbridge-smoke':
++                    continue  # Developer smoke binary is not shipped in player APKs.
+                 result['assets/' + tree + '/' + str(path.relative_to(base))] = str(path.relative_to(root))
+     for library in ['libproot.so', 'libproot-loader.so', 'libdirectaudiorelay.so']:
+         result['lib/arm64-v8a/' + library] = 'app/src/main/jniLibs/arm64-v8a/' + library

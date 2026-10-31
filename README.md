@@ -1,111 +1,62 @@
-# RP4 Pro DroidDeck（自编译版）
+# RP4 Pro DroidDeck · v0.5.1 玩家版
 
-给 **Retroid Pocket 4 Pro** 自己编译的 DroidDeck（在 Android 上跑 Steam / PC 游戏的运行时）。
-非官方构建，自签名，独立包名，可以和官方版并存。
+给 **Retroid Pocket 4 Pro** 编译的 DroidDeck，可在 Android 上运行 Steam / PC 游戏。非官方、自签名构建，包名 `com.rp4pro.droiddeck.lab`，可以与官方版并存。
 
-- 设备：Retroid Pocket 4 Pro（Mali-G77 MC9，Android 13，1334×750）
-- 基线：[yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) `source` 分支，已合并上游 fix46–fix51
-- 图形桥：[ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge) v0.5.4.2（fix44 的 MSAA errata 手工并入）
-- 源码仓库：[kb7b8z5k9d-creator/rp4develop](https://github.com/kb7b8z5k9d-creator/rp4develop)
-- 包名：`com.rp4pro.droiddeck.lab`，签名 `CN=RP4Pro Lab`
+**首次使用必须检查两项：手动开启 Mali Bridge，并手动下载、安装 Linux 运行时（支持包）。** PanVK 和 VKD3D 已内置，无需另找驱动 ZIP 或替换游戏 DLL。
 
-## 这个版本做了什么
+[下载 v0.5.1 APK](https://github.com/kb7b8z5k9d-creator/rp4test/releases/download/v0.5.1/RP4ProLab-v0.5.1.apk) · [版本说明](https://github.com/kb7b8z5k9d-creator/rp4test/releases/tag/v0.5.1) · [完整源码](https://github.com/kb7b8z5k9d-creator/rp4develop/tree/v0.5.1)
 
-**PanVK 安装即用版（默认）**
+## 新手首次安装
 
-- 内置 faux123 PanVK v1.1.3，支持导入、切换和直接加载，并自动检测 dma-buf 导出失败、使用兼容回退。已在 RP4 Pro 上验证能进入 Steam；ForestTD 使用 Vulkan / Forward Mobile 时可正常进入并游玩，截图中的测试场景约 50 FPS。该数据只代表当时场景。
-- 小小梦魇增强版已在 RP4 Pro / PanVK / Proton Experimental (ARM64) 使用单独的通用 VKD3D 组件通过 D3D12 进入游戏，画面正常，但帧率很低，尚未优化。ForestTD 默认 D3D12 路径在此修复后尚未复测；此前 Vulkan 对照使用启动参数 `%command% --rendering-method mobile --rendering-driver vulkan`。
-- PanVK 驱动（faux123 v1.1.3）和 VKD3D 组件已经打进 APK：首次启动自动安装，RP4 Pro 默认使用 PanVK；其他设备保持系统 Mali。VKD3D 组件是通用内存回退修复，对当前 Proton 的 64 位游戏生效；其他 Proton 版本和 32 位路径尚未验证。
-- 当前版本 [v0.5.0](../../releases/tag/v0.5.0) 已内置 PanVK 和 VKD3D；此前的 [DX12 预览](../../releases/tag/v0.3.0-dx12-preview)、[PanVK 预览](../../releases/tag/v0.2.0-panvk-preview) 与稳定版 v0.1.1-fix51 仍保留。
-- 源码 `source` / `driver-import` 的本次版本：`df822f1f9a48f2dc54af3ddeb1afe86a626b45af`。
+1. **安装 APK。** 下载上方安装包，在 Android 提示时允许安装未知来源应用，然后打开 **RP4Pro Lab**。
+2. **开启 Bridge。** 打开 **配置 → 概览**，找到显卡区域。若显示 **“Mali 桥接：关闭”**，点击使其变成 **“Mali 桥接：开启”**；已经开启则不用再点。RP4 Pro 需要图形桥接，选择 PanVK 不能代替开启 Bridge。若按钮不可点击，先结束正在运行的 Steam 会话。
+3. **安装 Linux 支持包。** 在同一页找到 **“Linux 运行时”**，点击 **“安装”**，保持联网，等待下载和解压完成。这就是所需的 Linux 支持环境；玩 Steam 不需要另装“Linux 桌面”。APK 内置驱动不代表包含完整 Linux 运行时。
+4. **启动 Steam。** 首次会下载所需的 **Proton Experimental (ARM64)**，随后自动准备 VKD3D。等“正在准备游戏组件”完成后，用自己的 Steam 账号登录；不用为了安装 VKD3D 再退出、重开应用。
+5. **检查图形模式。** 在 **配置 → 组件** 顶部查看“图形模式”。PanVK 已内置；若当前为系统 Mali，而你要运行需要 Vulkan 1.3 / D3D12 的游戏，点“启用 PanVK”，然后重启 Steam 会话。更新安装会保留已有驱动选择。
+6. **安装并运行游戏。** 帧生成默认关闭，需要时自行开启。
 
-**修复**
+后续更新通常直接覆盖安装，保持相同包名和签名。**v0.5.1 仍需手动完成上述第 2、3 步，请不要跳过。**
 
-- **Steam Big Picture 闪烁**：来自 Chromium 自己的 Vulkan 合成。会话环境里设置
-  `BL_VKBRIDGE_CEF_VULKAN=0`（ANGLE 仍走 Vulkan）后消失，对所有 Steam 页面和游戏生效。
-- **整画面闪烁（ForestTD 等）**：两个门槛都修了。游戏窗口可能是 1280×722，也可能 1152×648（源矩形
-  1151×647），合成器原来要求“窗口严格等于场景、源矩形严格等于整图”才给独立显示层，差一两个像素就
-  整场退回复制路径并闪烁。现在允许窗口 ±16 像素、源矩形 ±2 像素，并按窗口的实际位置和大小映射到
-  显示层；64×64 以下的触摸光标窗口也不再算“压在游戏上面”。
-- **上游补丁**：已合并 fix46–fix51，包括 MaliBridge v0.5.4.2、fix44 `msaa2_as_4`
-  （Mali-G77 只有 1×/4× 采样，D3D9 游戏要 2× 会退出，改为按 4× 创建）、抗锯齿开关、最快核心优先、
-  退 Retro 游戏时关闭模拟器等；DroidDeck 官方 0.6.7 之后的修复（GTK3、游戏目录识别、Steam UI 刷新率）
-  也都在里面。
-- **性能补丁**：DroidDeck 官方的 CPU 拓扑、proot fast path、compositor tick/render-on-commit。
-  在这台设备上均确认生效，帧率无明显变化，按“无负面影响”保留。
+## v0.5.1 改进
 
-**已知问题**
+- **首次安装顺序**：Proton 安装完成后，先准备并核验 VKD3D，再启动 Steam，无需等待下次启动应用。
+- **恢复与选择保护**：内置资源校验后原子安装；Proton 更新或重装后重新核对。保留已有驱动、菜单和组件选择，主动恢复原版 VKD3D 后不会被自动覆盖。
+- **玩家路径清理**：移除启动 smoke / vulkaninfo 测试、旧诊断参数文件入口和默认逐秒帧统计写盘。Release APK 不可调试，不打包 smoke 程序；保留必要的驱动兼容性检测、自动回退和正常错误日志。
+- **沿用实测组件**：内置 faux123 PanVK v1.1.3 和通用 VKD3D readback 回退，按实际驱动能力选择 DXVK。
+- 本机用户已确认本版可正常使用；电脑侧 **45 项回归检查通过**。本次没有进行新的性能优化或帧率对照测试。
 
-- Prison Architect 的地面贴图仍会闪。它走 OpenGL → Mesa zink → Vulkan → Mali 这条链，
-  与显示层无关；强制同步、关 GL 线程、游戏兼容模式都试过，无效，怀疑在 zink 的纹理/mipmap 路径。
-- Crimsonland 的中文文字有轻微偏移/重影。不是缩放采样、不是 DXVK、不是系统字体替换
-  （字体打包在游戏资源里），原因仍未定位。
+## 图形模式与验证范围
 
-## 图形模式（默认 PanVK，可一键切回）
+RP4 Pro 的系统 Mali 驱动报告 Vulkan 1.1.177；内置 PanVK 报告 Vulkan 1.3.363。需要 Vulkan 1.3 / D3D12 的游戏可使用 PanVK。组件页顶部可以切回系统 Mali，切换后重启 Steam 会话。
 
-安装后自动配置成 RP4 Pro 的默认体验：
+Bridge 开关和 PanVK 驱动选择是两项设置，RP4 Pro 使用 PanVK 时也需要开启 Bridge。Linux 侧的运行时驱动通常无需调整。Steam 保留 GPU 菜单及 CEF 防闪烁配置；帧生成是独立选项。
 
-- PanVK（Vulkan 1.3.363）加系统 Mali 桥接；
-- Proton Experimental (ARM64) 自动启用 VKD3D 回退组件；
-- Steam 使用 GPU 菜单，并关闭 Chromium 自己的 Vulkan 合成（修 Big Picture 闪烁）。
+VKD3D 的通用修复允许缺少 HOST_CACHED 时回退到真实可用的 HOST_VISIBLE 内存，不针对某个游戏。已验证范围为 **Proton Experimental (ARM64) 的 64 位路径**；其他 Proton、32 位路径和其他机型尚未完整验证。
 
-只有检测到 MT8797 / Retroid Pocket 4 才会自动启用；其他机型保持系统 Mali。
+## 游戏与已知问题
 
-### 三种模式的区别
+- **小小梦魇增强版**：此前已通过 D3D12 进入游戏，画面正常、无闪烁，但帧率低。
+- **ForestTD**：此前已验证默认 D3D12 可玩。一次测试约 45 fps，含 Win-FG 2×，原生约 23 fps；更早的 Vulkan / Forward Mobile 场景曾约 50 fps。不同渲染方式、场景和设置的数据不能直接比较驱动性能，也不代表 v0.5.1 的新基准。
+- **Prison Architect**：此前系统 Mali / zink 路径的地面贴图闪烁尚未解决。
+- **Crimsonland**：中文文字偏移或重影尚未定位。
 
-1. **系统 Mali + MaliBridge**：手机自带驱动，Vulkan 1.1.177。**帧率最高，现有游戏最稳**，日常和 D3D11/OpenGL 游戏优先用这个。
-2. **PanVK**：内置的 faux123 v1.1.3，Vulkan 1.3.363，带 `VK_EXT_transform_feedback`、`geometryStreams=1` 和 AHB/dma-buf。**对新 API / 新特性的兼容性更强**，适合需要 Vulkan 1.3 或 D3D12 的游戏；代价是**帧率通常低于 Mali**。
-3. **PanVK + VKD3D 回退组件**：在 PanVK 上跑 D3D12（VKD3D-Proton）时修复 READBACK 内存类型。只对当前 Proton Experimental (ARM64) 的 64 位路径验证过，其他 Proton 和 32 位未验证。
+若首次启动提示 GPU 不受支持或无法进入会话，先检查 **配置 → 概览** 中 Bridge 已开启、Linux 运行时已安装。需要反馈时可使用应用内日志分享；安装不需要 ADB 调试。
 
-CEF 设置不是独立模式，它只影响 Steam 界面，和游戏渲染无关。
+## 下载校验
 
-补充一点容易混淆的：**运行时驱动**是 Linux 侧的 Turnip，只在 Linux 自己加载 Vulkan 时用；**显示驱动**是 Android 侧的驱动，也是 Mali 桥接实际给游戏用的那个。RP4 上只需要切“图形模式”，不用动运行时驱动。
+- APK：`RP4ProLab-v0.5.1.apk`，71,842,487 字节（约 68.51 MiB）。
+- SHA-256：`597cb6a1d8c65d978c3bf6ce0f0746db0e3b0c50772508ee39b95e71c0938890`。
+- 版本 0.5.1 / versionCode 15；包名 `com.rp4pro.droiddeck.lab`；签名 `CN=RP4Pro Lab`，与旧版一致。
 
-### 怎么切
+发布附件是本机用户实测的同一份 APK。[历史版本](https://github.com/kb7b8z5k9d-creator/rp4test/releases)保留。
 
-组件页顶部现在直接有“图形模式”：启用 PanVK / 切回系统 Mali，点完重启会话。也可以从 配置 → 组件 → GPU 驱动 → 分别设置运行时驱动和显示驱动 → 显示驱动 进入同一个开关。
+## 源码与构建
 
-- 点“启用 PanVK” → 重启会话（退出 Steam 再进）；
-- 点“切回系统 Mali” → 重启会话；
-- 如果提示“请先导入 PanVK 驱动”，说明自动配置没跑或驱动被删除，可以从 Release 重新导入 `panvk_faux123_v1.1.3.adpkg.zip`。
-
-组件管理器里可以单独恢复 Proton 自带的 VKD3D：Proton Experimental (ARM64) → VKD3D-Proton → 选择原始版本。
-
-### 预期
-
-- ForestTD 默认 D3D12：一次实测约 45 fps（含 Win-FG 2×；原生约 23 fps），能正常游玩，不代表所有场景；
-- 小小梦魇增强版：能进入、画面正常，帧率低；
-- Steam 界面：GPU 菜单约 60 fps，不闪；
-- **要性能就切回系统 Mali；要 D3D12 / Vulkan 1.3 等新特性就用 PanVK。**
-
-## 安装
-
-1. 在 [Releases](../../releases) 下载 APK。
-2. 允许安装未知来源应用，安装即可（包名独立，不会覆盖官方版）。
-3. 首次启动按提示下载 Linux 运行时，然后登录 Steam。
-4. 自签名构建：以后更新要覆盖安装（保持同一签名）。
-5. 安装后默认就是 PanVK 配置：驱动和 VKD3D 组件已内置，首次启动自动安装（Proton Experimental 出现后自动启用）；想切回系统 Mali 或改回来见上面的“图形模式”。
-
-### v0.5.0 首次安装注意
-
-本版第一次进入 Steam 时，PanVK 已经就绪；Proton 会在启动 Steam 时自动下载，但 VKD3D 回退组件的检查只在 App 启动时做一次，所以这一次还不会装上。全新用户第一次直接启动依赖该回退的 D3D12 游戏（如小小梦魇增强版、ForestTD 默认 D3D12）可能初始化失败；**完全退出应用再进**（不是只退出 Steam 回桌面）后会装好，之后正常。下个版本会把组件安装接到 Proton 安装完成之后，不再需要这次重启。
-
-v0.5.0 安装即用版 APK SHA-256：`b92ac32bf469a59ba1b02709cfb0b815b74d515a71bb3c1f121487ae33b177f1`（内置 PanVK v1.1.3 和 VKD3D 组件）
-
-v0.3.0 DX12 预览版 APK SHA-256：`c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`；VKD3D 组件 SHA-256：`3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`。
-
-稳定版 v0.1.1-fix51 APK SHA-256：`8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`。
-
-## 构建
-
-Windows + WSL2 Ubuntu 24.04 + Docker（交叉编译镜像 `droiddeck-local-cross:24.04-v3`），
-NDK 27.3.13750724、JDK 17。源码与构建说明在源码仓库
-[rp4develop](https://github.com/kb7b8z5k9d-creator/rp4develop)，构建入口是 `tools/build_local.sh`。
-
-如果只想在官方 fix51 源码上复现改动：`patches/fix51-local-changes.patch`（相对 fix51 基线，24 个文件），
-用 `git apply` 应用；签名密钥不在仓库里，需自行生成。
-
-PanVK 接入补丁：`patches/driver-import.patch`，相对源码仓库 `af27c28c`；包含直接加载、自动导出回退、驱动能力识别和 VKD3D 源码补丁。VKD3D 组件的构建说明见源码仓库 `tools/vkd3d/`。
+- 完整源码：[rp4develop · v0.5.1](https://github.com/kb7b8z5k9d-creator/rp4develop/tree/v0.5.1)，`source` / `driver-import` 同步至 `56c4bd9b60fe0b29d54d70d0e50168a2a9447927`。
+- 本次增量：[patches/v0.5.1-player.patch](patches/v0.5.1-player.patch)，相对 `d37319fd`；此前内置的驱动和 WCP 资源在完整源码中。
+- 历史 `fix51-local-changes.patch`、`driver-import.patch` 对应旧基线，复现当前版本请使用完整源码标签。
+- 基线：[yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) fix51（含 fix46–fix51）；MaliBridge v0.5.4.2。
+- Windows + WSL2 Ubuntu 24.04 + Docker，NDK 27.3.13750724、JDK 17；构建入口 `tools/build_local.sh`，玩家 APK 使用 Release 构建。私钥不在仓库中。
 
 ## 上游项目
 
@@ -113,135 +64,71 @@ PanVK 接入补丁：`patches/driver-import.patch`，相对源码仓库 `af27c28
 - [ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge)
 - [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro)
 - [The412Banner/droiddeck-nonadreno-drivers](https://github.com/The412Banner/droiddeck-nonadreno-drivers)
-- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro)（另行导入的 PanVK 驱动）
+- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro)
 
-## 说明
-
-这是个人测试构建，不是 DroidDeck 或 MaliBridge 的官方发布。使用风险自负；
-不包含任何 Steam 凭据或设备标识。
+本构建非上述项目官方发布，不包含 Steam 凭据或设备标识。
 
 ---
 
-# RP4 Pro DroidDeck (self-built)
+# RP4 Pro DroidDeck · v0.5.1 player build
 
-A self-compiled DroidDeck build for the **Retroid Pocket 4 Pro** (the Android runtime that runs
-Steam and PC games). Unofficial, self-signed, with its own package name, so it can live beside the
-official app.
+An unofficial, self-signed DroidDeck build for the **Retroid Pocket 4 Pro**, running Steam / PC games on Android. Package `com.rp4pro.droiddeck.lab` can coexist with the official app.
 
-- Device: Retroid Pocket 4 Pro (Mali-G77 MC9, Android 13, 1334×750)
-- Base: [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) `source`, with
-  upstream fix46–fix51 merged
-- Graphics bridge: [ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge) v0.5.4.2 (fix44's
-  MSAA erratum hand-merged)
-- Source repository: [kb7b8z5k9d-creator/rp4develop](https://github.com/kb7b8z5k9d-creator/rp4develop)
-- Package: `com.rp4pro.droiddeck.lab`, signature `CN=RP4Pro Lab`
+**First-time users must enable the Mali bridge and manually download/install the Linux runtime support package.** PanVK and VKD3D are bundled; no separate driver ZIP or game-local DLL replacement is needed.
 
-## What this build changes
+[Download v0.5.1 APK](https://github.com/kb7b8z5k9d-creator/rp4test/releases/download/v0.5.1/RP4ProLab-v0.5.1.apk) · [Release notes](https://github.com/kb7b8z5k9d-creator/rp4test/releases/tag/v0.5.1) · [Full source](https://github.com/kb7b8z5k9d-creator/rp4develop/tree/v0.5.1)
 
-**Install-and-play PanVK build (default)**
+## First-time setup
 
-- Bundles faux123's PanVK v1.1.3, imports, switches to and directly loads it, automatically probing for failed dma-buf export and enabling the existing fallback. On RP4 Pro, Steam started and ForestTD ran using Vulkan / Forward Mobile; the captured scene showed about 50 FPS, which is not a general benchmark.
-- Little Nightmares Enhanced reached D3D12 gameplay with normal graphics on RP4 Pro / PanVK / Proton Experimental (ARM64), using the separately installed generic VKD3D component. Frame rate is very low and has not been optimized. ForestTD's default D3D12 path has not been retested with this fix; its earlier Vulkan control used `%command% --rendering-method mobile --rendering-driver vulkan`.
-- The PanVK driver (faux123 v1.1.3) and the VKD3D component are bundled in the APK: the first start installs them, and an RP4 Pro uses PanVK by default; other devices stay on the system Mali driver. The component provides a general memory fallback for 64-bit games using the selected Proton; other Proton versions and the 32-bit path remain unverified.
-- The current [v0.5.0](../../releases/tag/v0.5.0) bundles PanVK and VKD3D. The earlier [DX12 preview](../../releases/tag/v0.3.0-dx12-preview), [PanVK preview](../../releases/tag/v0.2.0-panvk-preview) and stable v0.1.1-fix51 remain available.
-- Source version on `source` / `driver-import`: `df822f1f9a48f2dc54af3ddeb1afe86a626b45af`.
+1. **Install the APK.** Allow installation from unknown sources when Android asks, then open **RP4Pro Lab**.
+2. **Enable the bridge.** Open **Setup → Overview**, find the GPU section, and change **“Mali bridge: off”** to **“Mali bridge: on”**. Leave it on if already enabled. Choosing PanVK does not replace enabling the bridge. If the button is disabled, end the running Steam session first.
+3. **Install Linux support.** On the same page, find **“Linux runtime”**, tap **“Install”**, and wait for download and extraction. This is the required support environment; Steam does not require the separate Linux desktop package. Bundling drivers does not bundle the full Linux runtime.
+4. **Start Steam.** The first launch downloads **Proton Experimental (ARM64)** as needed, then prepares VKD3D. Wait for “Preparing game components” and sign in with your own Steam account. No extra app restart is required to install VKD3D.
+5. **Check graphics mode.** At the top of **Setup → Components**, check “Graphics mode”. PanVK is bundled. If system Mali is selected and your game needs Vulkan 1.3 / D3D12, enable PanVK and restart the Steam session. Updates preserve existing driver choices.
+6. **Install and play games.** Frame generation is off by default; enable it yourself if desired.
 
-**Fixes**
+Future updates normally install over the existing app with the same package and signature. **v0.5.1 still requires the manual setup in steps 2–3.**
 
-- **Steam Big Picture flicker**: it came from Chromium's own Vulkan compositing. Setting
-  `BL_VKBRIDGE_CEF_VULKAN=0` in the session environment (ANGLE stays on Vulkan) removes it for every
-  Steam screen and every game.
-- **Whole-picture flicker (ForestTD and similar)**: two thresholds were fixed. A game window can be
-  1280×722, or 1152×648 with a 1151×647 source rectangle; the compositor used to give a window its
-  own display layer only when the window matched the scene exactly and the source matched the whole
-  image, so a one-pixel difference dropped the whole scene to the copy path and flickered. It now
-  accepts windows within ±16 px and sources within ±2 px, maps the buffer onto the window's actual
-  rectangle, and no longer counts touch-cursor windows of 64×64 or less as "above the game".
-- **Upstream patches**: fix46–fix51 are merged, including MaliBridge v0.5.4.2, fix44's `msaa2_as_4`
-  (Mali-G77 multisamples at 1×/4× only; D3D9 games that ask for 2× used to quit, now the texture is
-  made with 4 samples), the anti-aliasing switch, fastest-core-first ordering, closing Retro
-  emulators on exit, and DroidDeck's post-0.6.7 fixes (GTK3, game-folder listing, Steam UI refresh
-  pacing).
-- **Performance patches**: DroidDeck's CPU topology, proot fast path and compositor
-  tick/render-on-commit are included. All are confirmed active on this device; no measurable frame
-  rate change, kept because they cause no regression.
+## Changes in v0.5.1
 
-**Known issues**
+- Prepare and verify VKD3D after Proton installation and before Steam starts, without waiting for another app launch.
+- Verify assets and install atomically; recheck after Proton updates/reinstalls. Preserve player choices; explicitly restoring original VKD3D opts out of the automatic default.
+- Remove startup smoke / vulkaninfo tests, legacy diagnostic-file overrides and default per-second frame-statistics writes. The release APK is not debuggable and excludes the smoke binary. Required compatibility probes, automatic fallback and normal error logs remain.
+- Retain the validated faux123 PanVK v1.1.3 and generic VKD3D readback fallback; select DXVK from actual driver capabilities.
+- The RP4 Pro owner confirmed this version works; **45 computer-side regression checks passed**. No new performance optimization or controlled frame-rate comparison was performed.
 
-- Prison Architect's ground textures still flicker. They go through OpenGL → Mesa zink → Vulkan →
-  Mali, independent of the display layer; forced synchronisation, disabling GL threading and the
-  game's compatibility mode were all tried without effect. Suspected in zink's texture/mipmap path.
-- Crimsonland's Chinese text sits slightly off or ghosts. It is not scaling, not DXVK and not system
-  font substitution (the fonts are packed inside the game), and the cause is still unknown.
+## Graphics and validation scope
 
-## Graphics modes (PanVK by default, one-tap switch back)
+The stock Mali driver reports Vulkan 1.1.177; bundled PanVK reports Vulkan 1.3.363. PanVK can be used for games requiring Vulkan 1.3 / D3D12. Switch back to system Mali at the top of the Components page, then restart the Steam session.
 
-The first start configures the RP4 Pro default:
+The bridge switch and PanVK selection are separate settings; PanVK on RP4 Pro also needs the bridge. The Linux-side runtime driver normally needs no adjustment. Steam retains GPU menus and its CEF flicker fix; frame generation is separate.
 
-- PanVK (Vulkan 1.3.363) plus the system Mali bridge;
-- the VKD3D fallback component selected for Proton Experimental (ARM64);
-- GPU Steam menus, with Chromium's own Vulkan compositing off (the Big Picture flicker fix).
+The generic VKD3D fix falls back to a real HOST_VISIBLE memory type when HOST_CACHED is unavailable, without game-specific patches. The validated scope is the **64-bit path of Proton Experimental (ARM64)**; other Protons, 32-bit paths and other devices are not fully validated.
 
-Only an MT8797 / Retroid Pocket 4 gets this profile; other devices keep the system Mali driver.
+## Games and known issues
 
-### The three modes
+- **Little Nightmares Enhanced:** previously reached D3D12 gameplay with normal graphics and no flicker, but low frame rate.
+- **ForestTD:** previously playable with default D3D12. One session measured about 45 fps with Win-FG 2×, about 23 fps native; an earlier Vulkan / Forward Mobile scene showed about 50 fps. Different renderers, scenes and settings make these unsuitable for comparing driver performance or as a new v0.5.1 benchmark.
+- **Prison Architect:** previously observed stock-Mali / zink ground-texture flicker is unresolved.
+- **Crimsonland:** Chinese text offset or ghosting is unresolved.
 
-1. **System Mali + MaliBridge**: the phone's own driver, Vulkan 1.1.177. **Highest frame rate and the most stable choice for existing games**; use it day to day and for D3D11/OpenGL games.
-2. **PanVK**: the bundled faux123 v1.1.3, Vulkan 1.3.363, with `VK_EXT_transform_feedback`, `geometryStreams=1` and AHB/dma-buf. **Stronger compatibility with new APIs and features**, for games that need Vulkan 1.3 or D3D12; the cost is **a lower frame rate than Mali**.
-3. **PanVK + VKD3D fallback**: fixes the READBACK memory type for D3D12 (VKD3D-Proton) on PanVK. Verified only for the 64-bit path of the current Proton Experimental (ARM64); other Protons and the 32-bit path are unverified.
+If the first launch reports an unsupported GPU or cannot start a session, check **Setup → Overview** for an enabled bridge and an installed Linux runtime first. Use the app's log-sharing feature for reports; installation does not require ADB debugging.
 
-The CEF setting is not a mode: it changes only the Steam UI, not game rendering.
+## Download verification
 
-One distinction that causes confusion: the **runtime driver** is the Linux-side Turnip, used only when Linux loads Vulkan itself; the **display driver** is the Android-side driver, and it is what the Mali bridge gives the games. On the RP4 only the "Graphics mode" switch matters; leave the runtime driver alone.
+- APK: `RP4ProLab-v0.5.1.apk`, 71,842,487 bytes (about 68.51 MiB).
+- SHA-256: `597cb6a1d8c65d978c3bf6ce0f0746db0e3b0c50772508ee39b95e71c0938890`.
+- Version 0.5.1 / versionCode 15; package `com.rp4pro.droiddeck.lab`; signer `CN=RP4Pro Lab`, unchanged from earlier builds.
 
-### Switching
+The release attachment is the same APK validated by the RP4 Pro owner. [Previous versions](https://github.com/kb7b8z5k9d-creator/rp4test/releases) remain available.
 
-The Components page now has the "Graphics mode" switch at the top: enable PanVK or switch back to Mali, then restart the session. The same switch is also under Settings → Components → GPU drivers → Set the runtime and display drivers separately → Display driver.
+## Source and build
 
-- "Enable PanVK" → restart the session (leave Steam and start it again);
-- "Switch to Mali" → restart the session;
-- If it says "Import a PanVK driver first", the automatic setup did not run or the driver was removed; import `panvk_faux123_v1.1.3.adpkg.zip` from the Release.
-
-The component manager can restore Proton's own VKD3D separately: Proton Experimental (ARM64) → VKD3D-Proton → choose the original.
-
-### What to expect
-
-- ForestTD's default D3D12 path: about 45 fps in one measured session (with Win-FG 2×; about 23 fps native), playable; not a benchmark of every scene;
-- Little Nightmares Enhanced: starts with normal graphics, low frame rate;
-- Steam UI: GPU menus at about 60 fps, no flicker;
-- **Switch back to Mali when performance matters; use PanVK for D3D12 / Vulkan 1.3 and other new features.**
-
-## Install
-
-1. Download the APK from [Releases](../../releases).
-2. Allow installing apps from unknown sources and install it (the package is independent, the
-   official app is not replaced).
-3. On first start, download the Linux runtime as prompted, then sign in to Steam.
-4. Self-signed build: future updates must be installed over this one (same signature).
-5. The PanVK profile is the default after installing: the driver and the VKD3D component are built in, installed on the first start (the component is selected once Proton Experimental exists). To go back to system Mali, see "Graphics modes" above.
-
-### v0.5.0 first-install note
-
-On the first Steam start, PanVK is already ready; Proton downloads automatically, but the VKD3D fallback is only checked once at app start, so it is not installed yet. A new user who starts a D3D12 game that relies on the fallback (Little Nightmares Enhanced, ForestTD's default D3D12 path) may see initialisation fail; **fully quit the app and start it again** (not just leave Steam to the home screen) and it will be installed. The next version hooks the component install after Proton finishes, so this extra restart disappears.
-
-v0.5.0 install-and-play APK SHA-256: `b92ac32bf469a59ba1b02709cfb0b815b74d515a71bb3c1f121487ae33b177f1` (PanVK v1.1.3 and the VKD3D component are built in)
-
-v0.3.0 DX12 preview APK SHA-256: `c1edd69d24ff4e531516a9e7e944ac0e3c3cdd8e8e760bbc7f0ed8a94abc677a`; VKD3D component SHA-256: `3c3043bdb57f18a7bc8b93f36acf846e35693f7eb4c7b97f2fb7f5922dc8cfa6`.
-
-Stable v0.1.1-fix51 APK SHA-256: `8c8c41079e6fcd4dd62b5fc9a5c67a0071834d79ef0c7ef440ab7c5ed79aa002`.
-
-## Build
-
-Windows + WSL2 Ubuntu 24.04 + Docker (cross-compile image `droiddeck-local-cross:24.04-v3`),
-NDK 27.3.13750724, JDK 17. The source and build notes are in the source repository
-[rp4develop](https://github.com/kb7b8z5k9d-creator/rp4develop); the entry point is
-`tools/build_local.sh`.
-
-To reproduce the changes on the official fix51 tree instead:
-`patches/fix51-local-changes.patch` (24 files against fix51), apply with `git apply`. The signing
-key is not in the repository; generate your own.
-
-The PanVK integration patch `patches/driver-import.patch` is relative to source commit `af27c28c` and includes direct loading, automatic export fallback, driver capability detection and the VKD3D source patch. See `tools/vkd3d/` in the source repository for component build notes.
+- Full source: [rp4develop · v0.5.1](https://github.com/kb7b8z5k9d-creator/rp4develop/tree/v0.5.1); `source` / `driver-import` are synchronized at `56c4bd9b60fe0b29d54d70d0e50168a2a9447927`.
+- Incremental patch: [patches/v0.5.1-player.patch](patches/v0.5.1-player.patch), relative to `d37319fd`. Previously bundled driver/WCP assets are in the full source tree.
+- `fix51-local-changes.patch` and `driver-import.patch` are historical material for their original baselines; use the source tag to reproduce this version.
+- Base: [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro) fix51, including fix46–fix51; MaliBridge v0.5.4.2.
+- Windows + WSL2 Ubuntu 24.04 + Docker, NDK 27.3.13750724, JDK 17; entry point `tools/build_local.sh`. Use a Release build for the player APK. Private signing keys are not in the repository.
 
 ## Upstream projects
 
@@ -249,9 +136,6 @@ The PanVK integration patch `patches/driver-import.patch` is relative to source 
 - [ASEbrahim/MaliBridge](https://github.com/ASEbrahim/MaliBridge)
 - [yujikaido/droiddeck-rp4pro](https://github.com/yujikaido/droiddeck-rp4pro)
 - [The412Banner/droiddeck-nonadreno-drivers](https://github.com/The412Banner/droiddeck-nonadreno-drivers)
-- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro) (PanVK driver, imported separately)
+- [faux123/panvk-faux123-driver-rp4pro](https://github.com/faux123/panvk-faux123-driver-rp4pro)
 
-## Notes
-
-This is a personal test build, not an official DroidDeck or MaliBridge release. Use at your own
-risk; it contains no Steam credentials or device identifiers.
+This build is unofficial and contains no Steam credentials or device identifiers.
